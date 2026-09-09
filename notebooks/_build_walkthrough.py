@@ -279,6 +279,89 @@ print(f"   kernel direction : MSE {mse_kernel[i]:.3e}   ({mse_kernel[i]/base:8.1
 """)
 
 md(r"""
+### First, let's actually look at $J$
+
+We keep talking about the Jacobian as if it were an abstract object. It's a
+concrete $N \times P$ matrix and we can just print it. Three views, each of which
+will matter later.
+""")
+
+code(r"""
+# Sort the rows by x. The training points arrive in random order, and without
+# sorting the structure below is invisible -- an easy way to fool yourself.
+order = torch.argsort(x_train.squeeze())
+Jnp = J[order].numpy()
+fig, ax = plt.subplots(1, 3, figsize=(14.5, 3.8))
+
+# --- (a) the matrix itself ---
+lim = np.abs(Jnp).max()
+im = ax[0].imshow(Jnp, aspect="auto", cmap="RdBu_r", vmin=-lim, vmax=lim)
+ax[0].set_xlabel(f"parameter index  (P = {P})")
+ax[0].set_ylabel(f"training point, sorted by $x$  (N = {N})")
+ax[0].set_title("(a) $J$ itself: row $n$ = how prediction $n$\nresponds to each weight",
+                fontsize=9)
+ax[0].grid(False)
+fig.colorbar(im, ax=ax[0], fraction=0.046)
+
+# --- (b) singular values: "the rank" is a choice, not a fact ---
+sv = torch.linalg.svdvals(J).numpy()
+ax[1].semilogy(sv / sv[0], "o-", ms=3)
+for rt, c in [(1e-3, "tab:red"), (1e-6, "tab:orange"), (1e-10, "tab:green")]:
+    r = int((sv > rt * sv[0]).sum())
+    ax[1].axhline(rt, color=c, ls="--", lw=1)
+    ax[1].annotate(f"cutoff {rt:g}  ->  rank {r}", (len(sv) * 0.30, rt * 2.0),
+                   fontsize=7, color=c)
+ax[1].set_xlabel("index $i$")
+ax[1].set_ylabel(r"$\sigma_i / \sigma_1$")
+ax[1].set_title("(b) singular values of $J$\n(where does the kernel begin?)", fontsize=9)
+
+# --- (c) do different data points say different things? ---
+Js = J[order]
+Jn = Js / Js.norm(dim=1, keepdim=True)
+Cm = (Jn @ Jn.T).numpy()
+im = ax[2].imshow(np.abs(Cm), cmap="viridis", vmin=0, vmax=1)
+ax[2].set_xlabel("training point (sorted by $x$)")
+ax[2].set_ylabel("training point (sorted by $x$)")
+ax[2].set_title("(c) $|\\cos|$ between rows of $J$\n(how redundant is the data?)",
+                fontsize=9)
+ax[2].grid(False)
+fig.colorbar(im, ax=ax[2], fraction=0.046)
+
+plt.tight_layout(); plt.show()
+
+off = np.abs(Cm)[~np.eye(N, dtype=bool)]
+print(f"J is {tuple(J.shape)}  ->  at most rank {min(J.shape)}")
+print(f"off-diagonal |cos| between Jacobian rows: "
+      f"median {np.median(off):.4f}, 10th pct {np.percentile(off, 10):.4f}")
+print(f"\nsigma_1 / sigma_N = {sv[0] / sv[-1]:.3e}   (condition number of J)")
+""")
+
+md(r"""
+Three lessons, and each one comes back later.
+
+**(a) The matrix is smooth and banded, not random.** Each row is one training
+point's sensitivity vector. Rows for nearby $x$ look alike, because the network is
+a continuous function — nearby inputs excite nearly the same weights.
+
+**(b) "The rank of $J$" is not a well-defined number.** The singular values decay
+smoothly across many orders of magnitude, so where the kernel starts depends on
+the cutoff you pick: a threshold of $10^{-3}$ gives one rank, $10^{-10}$ gives a
+much larger one. This is not pedantry — it means *"the kernel" is a modelling
+choice*, and if two parts of your code disagree about the tolerance they are
+working with different subspaces. (We hit exactly this bug while building this
+notebook.)
+
+**(c) The data is locally redundant, and you can see the band.** Rows for nearby
+$x$ have $|\cos|$ close to 1 — those training points are telling us almost the
+*same* thing about which weights matter — while far-apart points are nearly
+orthogonal. The median off-diagonal $|\cos|$ is about $0.63$, which is enormous
+for vectors in a 321-dimensional space (two random directions there would give
+$pprox 0.06$). That redundancy is why the effective rank sits far below $N$, and
+it is the seed of the convergence failure we diagnose in §6.1. Hold on to this
+panel — we will come back to it.
+""")
+
+md(r"""
 **This is the entire paper in one plot.** Both perturbations have identical
 length. The random one blows the training loss up by orders of magnitude; the
 kernel one barely moves it.
@@ -292,6 +375,145 @@ The residual damage is $O(\|\delta\|^2)$: second-order curvature the linear
 approximation ignores. Notice the kernel curve's slope is about twice the random
 curve's on the log-log plot, exactly as a quadratic-vs-linear comparison should be.
 
+""")
+
+md(r"""
+### And now: what does the kernel actually *look like*?
+
+$\ker(J)$ is a 294-dimensional subspace of a 321-dimensional space. You cannot
+draw that. But you don't need to — you can watch what it *does*. A direction in
+the kernel is defined by its effect on the function, so let's plot the function.
+
+Below: eight perturbations drawn from the kernel, and eight isotropic ones, all at
+**exactly the same** $\|\delta\|$. Also the eigenvalues of the projector $UU^\top$,
+which are the cleanest possible summary of "which directions survive".
+""")
+
+code(r"""
+x_fine = torch.linspace(-1.0, 2.0, 200).reshape(-1, 1)
+f0_fine = f_model(theta_map, x_fine).squeeze(-1).detach()
+f0_train = f_model(theta_map, x_train).squeeze(-1).detach()
+STEP = 0.35                                  # comfortably inside the linear regime
+
+# Plot the CHANGE in the function, not the function. A single random direction in
+# a 294-dimensional kernel is nearly orthogonal to any fixed vector, so it moves
+# f by ~0.01 -- invisible if you overplot two copies of a curve of range 2.
+g2 = torch.Generator().manual_seed(21)
+ker_fine, rnd_fine, ker_tr, rnd_tr, ker_lin = [], [], [], [], []
+for _ in range(8):
+    e = torch.randn(P, generator=g2)
+    d_ker = kernel_proj @ e
+    d_ker = d_ker / d_ker.norm() * STEP
+    d_rnd = e / e.norm() * STEP
+    for d, acc_fine, acc_tr in [(d_ker, ker_fine, ker_tr), (d_rnd, rnd_fine, rnd_tr)]:
+        th = {n: theta_map[n] + v for n, v in unflatten(d).items()}
+        acc_fine.append((f_model(th, x_fine).squeeze(-1).detach() - f0_fine).numpy())
+        acc_tr.append((f_model(th, x_train).squeeze(-1).detach() - f0_train).abs().numpy())
+    # the LINEARISED change, J delta, which is what the lemma actually bounds
+    ker_lin.append((J @ d_ker).abs().numpy())
+
+fig, axs = plt.subplots(2, 2, figsize=(12.5, 7.2))
+lim = max(np.abs(np.array(ker_fine)).max(), np.abs(np.array(rnd_fine)).max()) * 1.08
+
+for ax, curves, ttl in [(axs[0, 0], ker_fine, r"drawn from $\ker(J)$"),
+                        (axs[0, 1], rnd_fine, "isotropic")]:
+    for c in curves:
+        ax.plot(x_fine, c, lw=0.9, alpha=0.8, color="tab:blue")
+    ax.axhline(0, color="k", lw=1.0)
+    ax.axvspan(0, 1, color="grey", alpha=0.12)
+    ax.scatter(x_train, np.zeros(N), s=9, c="crimson", zorder=5, label="training data")
+    ax.set_ylim(-lim, lim)
+    ax.set_xlabel("x"); ax.set_ylabel(r"$\Delta f(x)$")
+    ax.set_title(f"8 perturbations {ttl}\nsame $\\|\\delta\\|$ = {STEP}", fontsize=9)
+    ax.legend(fontsize=7, loc="upper right")
+
+# how big is the change AT the training points?
+ax = axs[1, 0]
+ax.semilogy(np.concatenate(rnd_tr) + 1e-20, ".", ms=3, color="tab:red",
+            label=r"isotropic $\delta$, true net  (first order)")
+ax.semilogy(np.concatenate(ker_tr) + 1e-20, ".", ms=3, color="tab:blue",
+            label=r"$\ker(J)$ $\delta$, true net  (second order)")
+ax.semilogy(np.concatenate(ker_lin) + 1e-20, ".", ms=3, color="tab:green",
+            label=r"$\ker(J)$ $\delta$, linearised  ($J\delta$, exactly 0)")
+ax.set_xlabel("(sample, training point) pair")
+ax.set_ylabel(r"$|\Delta f|$ at a training point")
+ax.set_title("Where Lemma 3.1 is exact, and where curvature creeps in",
+             fontsize=9)
+ax.legend(fontsize=6.5, loc="lower right")
+
+# the projector's spectrum
+ax = axs[1, 1]
+ev = torch.linalg.eigvalsh(kernel_proj).numpy()
+ax.plot(np.sort(ev)[::-1], "o", ms=2.5)
+ax.set_xlabel("index"); ax.set_ylabel(r"eigenvalue of $UU^\top$")
+ax.set_ylim(-0.15, 1.15)
+ax.axhline(1, color="tab:green", ls="--", lw=1)
+ax.axhline(0, color="tab:red", ls="--", lw=1)
+ax.annotate("kept  (in the kernel)", (5, 1.04), fontsize=7, color="tab:green")
+ax.annotate("removed  (row space of $J$)", (len(ev) * 0.42, 0.05), fontsize=7,
+            color="tab:red")
+ax.set_title("A projector has only two eigenvalues: 0 and 1", fontsize=9)
+
+plt.tight_layout(); plt.show()
+
+n_one = int((ev > 0.5).sum())
+print(f"projector eigenvalues: {n_one} ones, {len(ev) - n_one} zeros"
+      f"   (trace = {ev.sum():.4f} = the kernel dimension)")
+print(f"\nmax |change in f| AT the training points, ||delta|| = {STEP}")
+print(f"   isotropic, true network   : {np.concatenate(rnd_tr).max():.3e}   <- first order")
+print(f"   ker(J),    true network   : {np.concatenate(ker_tr).max():.3e}   <- second order only")
+print(f"   ker(J),    LINEARISED     : {np.concatenate(ker_lin).max():.3e}   <- exactly zero")
+print(f"\n   ratio isotropic / kernel  : "
+      f"{np.concatenate(rnd_tr).max() / np.concatenate(ker_tr).max():,.0f}x")
+print(f"\nmax |change in f| OUTSIDE [0, 1]")
+outside = ((x_fine.squeeze() < 0) | (x_fine.squeeze() > 1)).numpy()
+print(f"   kernel directions   : {np.abs(np.array(ker_fine))[:, outside].max():.3e}")
+print(f"   isotropic directions: {np.abs(np.array(rnd_fine))[:, outside].max():.3e}")
+""")
+
+md(r"""
+Compare the top two panels. They share a $y$-axis and the perturbations have
+identical length.
+
+The **isotropic** perturbations (top right) move the function everywhere,
+including right through the training data. That is underfitting, mechanically: the
+model has stopped fitting its own training set, and averaging those curves gives
+you something worse than $\theta_{map}$.
+
+The **kernel** perturbations (top left) are pinned to zero across $[0,1]$ and only
+lift away outside it. Note that they move the function much *less* even off-data —
+that is not a failure, it is high-dimensional geometry: a single random direction
+in a 294-dimensional subspace is nearly orthogonal to any particular vector, so
+one sample moves $f$ only a little. The *variance over many samples* is what
+Lemma 3.2 talks about, and the bathtub plot below measures it properly.
+
+The bottom-left panel is the careful version of the claim, and it's worth being
+precise about what the lemma does and does not promise.
+
+- **Green**: the *linearised* change $J\delta$ at each training point, for kernel
+  directions. This is machine zero. Lemma 3.1 is an exact statement, and this is
+  it — no approximation anywhere.
+- **Blue**: the change in the *actual network* $f(\theta_{map} + \delta)$ for the
+  same kernel directions. Around $10^{-3}$, not zero. The first-order term
+  vanished by construction, so what's left is pure curvature: the
+  $O(\|\delta\|^2)$ residual the Taylor expansion discarded.
+- **Red**: isotropic directions on the actual network, around $10^{-1}$. Here the
+  first-order term is *not* zero and dominates everything.
+
+So the honest summary is: the projection kills the first-order term **exactly**,
+and the leftover damage is second order. That is a weaker claim than "the loss
+never changes" — and it is precisely the claim Lemma 4.3 makes for the loss
+version. It's also why §6.2 has to be read on log-log axes: the whole content of
+the lemma is a change of *slope* from 1 to 2, not a change to zero.
+
+The bottom-right panel is the paper's numerical-stability argument. A projector's
+eigenvalues are only ever $0$ or $1$ — nothing in between — so $UU^\top$ is
+perfectly conditioned, unlike the GGN whose condition number routinely exceeds
+$10^6$. And the **trace equals the number of ones**, i.e. the kernel dimension:
+that identity is exactly what makes Hutchinson's estimator work in §6.3.
+""")
+
+md(r"""
 ### But wait — is the uncertainty then useless?
 
 If samples don't change training predictions, do they change *anything*? Yes.
@@ -360,6 +582,9 @@ print(f"ratio                             : "
 """)
 
 md(r"""
+(The flat floor at $10^{-12}$ in the middle panel is the `np.maximum` clamp — the
+true value there is numerically zero, and a log axis cannot show zero.)
+
 Note the **log scale** on the middle panel — this is why a naive $\pm 2\sigma$
 band looks like nothing at all. Inside the training range the predictive standard
 deviation is $\sim\!10^{-8}$: numerically zero, exactly as Lemma 3.1 demands.
@@ -500,6 +725,7 @@ for ax, ang_deg in zip(axes[:2], [70, 8]):
     ax.plot(pts[:, 0], pts[:, 1], "o-", ms=3, lw=0.9, color="crimson")
     ax.scatter([0], [0], marker="*", s=180, c="k", zorder=5,
                label="intersection = origin")
+    ax.set_xlim(-1.7, 1.7); ax.set_ylim(-1.7, 1.7)
     ax.set_aspect("equal"); ax.grid(alpha=0.25)
     ax.set_title(f"angle = {ang_deg}$^\\circ$,  $\\cos^2\\theta$ = "
                  f"{np.cos(a) ** 2:.3f}\nafter 9 sweeps  "
@@ -778,6 +1004,139 @@ $$\big|\ell(f(\theta,x_n),y_n) - \ell(f(\theta_{\text{map}},x_n),y_n)\big| = O(\
 
 For the "we don't underfit" claim, that's exactly what we need.
 
+""")
+
+md(r"""
+### Lemma 4.2, concretely: swapping predictions for loss
+
+Lemma 4.2 says $\ker(J_\theta) \subseteq \ker(J^L_\theta)$, and adds a detail that
+matters for us: *the two are identical when $O = 1$*. Our regression toy has one
+output, so it cannot show the difference at all. We need a multi-output model.
+
+So here is a 3-class classifier. Now $J$ has $N \times O = 3N$ rows (one per
+datum per class) while $J^L$ has only $N$. The loss-kernel is strictly bigger, and
+we can find a direction that lives in it but *not* in the prediction-kernel. Such a
+direction should **change the logits while leaving every per-datum loss alone** —
+which is precisely the trade the paper makes to escape the $O$ blow-up.
+""")
+
+code(r"""
+torch.manual_seed(7)
+Nc, Oc = 24, 3
+xc = torch.randn(Nc, 2)
+yc = (xc[:, 0] + xc[:, 1] > 0).long() + (xc[:, 0] > 0.5).long()   # 3 classes
+clf = nn.Sequential(nn.Linear(2, 12), nn.Tanh(), nn.Linear(12, Oc))
+oc = torch.optim.Adam(clf.parameters(), lr=5e-2)
+for _ in range(1200):
+    l = nn.functional.cross_entropy(clf(xc), yc)
+    oc.zero_grad(); l.backward(); oc.step()
+
+cnames = [n for n, _ in clf.named_parameters()]
+tc = {n: q.detach().clone() for n, q in clf.named_parameters()}
+cshapes = [tc[n].shape for n in cnames]
+cnumels = [tc[n].numel() for n in cnames]
+Pc = sum(cnumels)
+
+def unf_c(v):
+    o, i = {}, 0
+    for n, s, ne in zip(cnames, cshapes, cnumels):
+        o[n] = v[i:i + ne].view(s); i += ne
+    return o
+
+def logits_c(th):
+    return functional_call(clf, th, (xc,)).reshape(-1)          # (Nc*Oc,)
+
+def perdatum_loss_c(th):
+    return nn.functional.cross_entropy(functional_call(clf, th, (xc,)), yc,
+                                       reduction="none")        # (Nc,)
+
+def jac_of(fn):
+    rows = []
+    for k in range(Pc):
+        e = torch.zeros(Pc); e[k] = 1.0
+        _, jv = jvp(fn, (tc,), (unf_c(e),))
+        rows.append(jv)
+    return torch.stack(rows, dim=1)
+
+Jfull = jac_of(logits_c)            # (Nc*Oc, Pc)  -- the PREDICTION Jacobian
+JL = jac_of(perdatum_loss_c)        # (Nc,    Pc)  -- the LOSS Jacobian
+print(f"P = {Pc};   J has shape {tuple(Jfull.shape)};   J^L has shape {tuple(JL.shape)}")
+
+def kernel_projector(M, rtol=1e-8):
+    _, s, Vh = torch.linalg.svd(M, full_matrices=False)
+    keep = s > rtol * s.max()
+    V = Vh[keep]
+    return torch.eye(Pc) - V.T @ V, int(keep.sum())
+
+Pk_full, r_full = kernel_projector(Jfull)
+Pk_loss, r_loss = kernel_projector(JL)
+print(f"dim ker(J)   = {Pc - r_full}    (predictions preserved)")
+print(f"dim ker(J^L) = {Pc - r_loss}    (only the loss preserved)")
+print(f"the loss-kernel is {(Pc - r_loss) - (Pc - r_full)} dimensions bigger")
+
+# containment check: project a ker(J) vector into ker(J^L) and see if it moves
+gg = torch.Generator().manual_seed(4)
+v_in_kerJ = Pk_full @ torch.randn(Pc, generator=gg)
+leak = float((v_in_kerJ - Pk_loss @ v_in_kerJ).norm() / v_in_kerJ.norm())
+print(f"\nLemma 4.2 check: a vector in ker(J), re-projected into ker(J^L),")
+print(f"moves by a relative {leak:.3e}  ->  ker(J) really does sit inside ker(J^L)")
+
+# a direction in ker(J^L) but NOT in ker(J)
+d = Pk_loss @ torch.randn(Pc, generator=gg)
+d = d - Pk_full @ d
+d = d / d.norm() * 1e-3
+print(f"\nnow take delta in ker(J^L) but orthogonal to ker(J), ||delta|| = {d.norm():.1e}")
+""")
+
+code(r"""
+base_logits = logits_c(tc).detach()
+base_losses = perdatum_loss_c(tc).detach()
+th_p = {n: tc[n] + v for n, v in unf_c(d).items()}
+dlogit = (logits_c(th_p).detach() - base_logits).abs()
+dloss = (perdatum_loss_c(th_p).detach() - base_losses).abs()
+
+fig, ax = plt.subplots(1, 3, figsize=(14, 3.5))
+ax[0].bar(range(len(dlogit)), dlogit.numpy(), color="tab:orange")
+ax[0].set_xlabel(f"logit index (datum x class, {Nc}x{Oc})")
+ax[0].set_ylabel("|change in logit|")
+ax[0].set_title("Predictions DO move", fontsize=10)
+
+ax[1].bar(range(len(dloss)), dloss.numpy(), color="tab:blue")
+ax[1].set_xlabel("training datum")
+ax[1].set_ylabel("|change in per-datum loss|")
+ax[1].set_ylim(0, max(float(dlogit.max()), 1e-12))     # SAME scale as the left
+ax[1].set_title("...but the loss does not (same y-scale as left)", fontsize=9)
+
+ax[2].semilogy(dlogit.numpy(), ".", ms=4, color="tab:orange", label="logits")
+ax[2].semilogy(dloss.numpy(), ".", ms=5, color="tab:blue", label="per-datum loss")
+ax[2].set_xlabel("index"); ax[2].set_ylabel("|change|")
+ax[2].set_title("the same data on a log scale, so you can see both", fontsize=9)
+ax[2].legend(fontsize=8)
+plt.tight_layout(); plt.show()
+
+print(f"max |change in logit|            : {dlogit.max():.3e}")
+print(f"max |change in per-datum loss|   : {dloss.max():.3e}")
+print(f"ratio                            : {dlogit.max() / dloss.max():,.0f}x")
+""")
+
+md(r"""
+The two panels are drawn on the **same vertical scale**, which is the whole point.
+The logits move by a visible amount; the per-datum losses move by an amount
+thousands of times smaller. We bought a bigger kernel — more room for the
+posterior — by weakening the promise from "your predictions are untouched" to
+"your loss is untouched".
+
+For an LLM that trade is not optional, it is the only way in: it is what turns a
+$25{,}165{,}824$-row-per-sequence Jacobian into a one-row-per-sequence one.
+
+And it is a *sensible* trade for the underfitting argument, because underfitting
+was always defined in terms of loss. If every training point keeps its loss, the
+Bayesian predictive cannot be worse-fitting than $\theta_{map}$, whatever happened
+to the individual logits.
+
+""")
+
+md(r"""
 ### One row per sequence, or one per token?
 
 For a language model there's a genuine choice the paper doesn't address, because
@@ -866,9 +1225,13 @@ monotonically (the extrapolation step can overshoot). So the left panel is not
 "steady convergence"; it is one big drop followed by a flat, noisy floor.
 
 The right panel is the damning one. The **relative error against the exact
-projector** starts near 1, falls to ~0.25 after the first sweep, and then simply
-stops. After 1500 sweeps it is still ~0.2: the iterate is *not* converging to the
-right subspace on this problem, and more compute will not rescue it.
+projector** begins at $\approx 0.42$ and, after 1500 sweeps, has reached only
+$\approx 0.34$. That is essentially a flat line: the first sweep does not help it,
+and neither do the next 1499. The iterate is *not* converging to the right
+subspace on this problem, and more compute will not rescue it.
+
+Which also shows why the residual is a treacherous diagnostic on its own. It fell
+by a factor of 170 while the quantity we actually care about barely budged.
 
 Is the implementation wrong? No. The repository's test suite contains
 `test_converges_to_exact_projector`, which on a well-conditioned problem reaches
@@ -978,34 +1341,109 @@ print("mode='token' multiplies it by the sequence length T, moving you down.")
 """)
 
 code(r"""
-# The fix: compare at MATCHED ||delta||, which is where Lemma 4.3 actually speaks.
-v_ker = project(eps0.clone(), 400); v_ker = v_ker / v_ker.norm()
-v_rnd = torch.randn(P, generator=torch.Generator().manual_seed(9)); v_rnd = v_rnd / v_rnd.norm()
+# Compare at MATCHED ||delta||: that is the only regime where Lemma 4.3 speaks.
+# NOTE: we use the EXACT kernel projector here, not the iterative one -- section 6.1
+# showed the iteration does not converge on this problem, so its output is not
+# actually in the kernel and would muddy the comparison.
+v_ker = kernel_proj @ eps0
+v_ker = v_ker / v_ker.norm()
+v_rnd = torch.randn(P, generator=torch.Generator().manual_seed(9))
+v_rnd = v_rnd / v_rnd.norm()
 
-norms = np.logspace(-4, 0.5, 14)
-def curve(u):
-    out = []
-    for s in norms:
-        th = {n: theta_map[n] + v for n, v in unflatten(u * float(s)).items()}
-        out.append(max(abs(train_mse(th) - base), 1e-18))
-    return out
+def worst_perdatum_change(u, scale):
+    # Lemma 4.3 is a statement about EACH datum, so track the worst one.
+    th = {n: theta_map[n] + v for n, v in unflatten(u * float(scale)).items()}
+    before = ((f_model(theta_map, x_train) - y_train) ** 2).squeeze(-1)
+    after = ((f_model(th, x_train) - y_train) ** 2).squeeze(-1)
+    return max(float((after - before).abs().max()), 1e-18)
 
-fig, ax = plt.subplots(figsize=(5.8, 3.8))
-ax.loglog(norms, curve(v_ker), "o-", label=r"projected ($\ker J$)")
-ax.loglog(norms, curve(v_rnd), "^--", label="isotropic")
-ax.loglog(norms, norms ** 2 * 1e-2, "k-", alpha=0.35, lw=1, label=r"$O(\|\delta\|^2)$")
-ax.loglog(norms, norms * 1e-2, "k--", alpha=0.35, lw=1, label=r"$O(\|\delta\|)$")
-ax.set_xlabel(r"$\|\delta\|$"); ax.set_ylabel("|change in train MSE|")
-ax.set_title("Lemma 4.3 holds — but only inside the linear regime")
-ax.legend(fontsize=8)
+norms = np.logspace(-4, 0.7, 18)
+c_ker = [worst_perdatum_change(v_ker, s) for s in norms]
+c_rnd = [worst_perdatum_change(v_rnd, s) for s in norms]
+
+fig, ax = plt.subplots(figsize=(7.2, 4.6))
+ax.loglog(norms, c_rnd, "^--", color="tab:red", label="isotropic direction", ms=5)
+ax.loglog(norms, c_ker, "o-", color="tab:blue", label=r"projected direction ($\ker J$)", ms=5)
+
+# reference slopes, anchored to pass near each curve
+ax.loglog(norms, c_rnd[6] * (norms / norms[6]) ** 1, "-", color="grey", lw=1, alpha=0.8)
+ax.loglog(norms, c_ker[10] * (norms / norms[10]) ** 2, "-", color="grey", lw=1, alpha=0.8)
+ax.annotate("slope 1: $O(\\|\\delta\\|)$", (norms[2], c_rnd[6] * (norms[2] / norms[6])),
+            fontsize=8, color="dimgrey", rotation=17, va="bottom")
+ax.annotate("slope 2: $O(\\|\\delta\\|^2)$",
+            (norms[4], c_ker[10] * (norms[4] / norms[10]) ** 2),
+            fontsize=8, color="dimgrey", rotation=31, va="bottom")
+
+ax.axvline(limit, color="k", ls=":", lw=1.2)
+ax.axvspan(limit, norms[-1], color="orange", alpha=0.10)
+ax.annotate("linear regime ends\n(Taylor expansion invalid,\nLemma 4.3 says nothing)",
+            (limit * 1.12, min(c_ker) * 30), fontsize=7.5, color="darkorange")
+
+alpha_star_norm = (P / (theta_norm_sq / N)) ** 0.5
+if alpha_star_norm <= norms[-1]:
+    ax.axvline(alpha_star_norm, color="tab:purple", ls="-.", lw=1.2)
+else:
+    ax.annotate(f"$\\alpha^*$ puts you at $\\|\\delta\\|\\approx${alpha_star_norm:.0f},\n"
+                "far off the right of this plot",
+                (norms[-1] * 0.28, max(c_rnd) * 0.02), fontsize=8, color="tab:purple",
+                ha="right")
+
+ax.set_xlabel(r"$\|\delta\|$  = how far we move from $\theta_{map}$ in weight space")
+ax.set_ylabel(r"worst per-datum $|\Delta \mathrm{loss}|$")
+ax.set_title("Lemma 4.3: the projected direction is second-order, the isotropic one first-order",
+             fontsize=9.5)
+ax.legend(fontsize=8, loc="upper left")
 plt.tight_layout(); plt.show()
+
+i = int(np.argmin(np.abs(norms - 1e-2)))
+print(f"at ||delta|| = {norms[i]:.1e}:")
+print(f"   isotropic  worst |dloss| = {c_rnd[i]:.3e}")
+print(f"   projected  worst |dloss| = {c_ker[i]:.3e}")
+print(f"   projection is {c_rnd[i] / c_ker[i]:,.0f}x gentler on the training loss")
 """)
 
 md(r"""
-The projected curve tracks the **quadratic** reference slope while the isotropic
-one tracks the **linear** slope — precisely Lemma 4.3. But look at the right-hand
-end: once $\|\delta\|$ is large enough, both curves flatten into the same
-saturated mess. If $\alpha^*$ lands you there, the theory tells you nothing.
+#### How to read that plot
+
+It repays a slow look, because it is Lemma 4.3 in a single picture.
+
+- **The $x$-axis** is how far we step away from $\theta_{map}$, measured as the
+  Euclidean norm $\|\delta\|$ in weight space. Left = a tiny nudge, right = a
+  big jump.
+- **The $y$-axis** is the damage that step does: across all training points, the
+  largest change in that point's loss. Zero would mean "the training fit is
+  completely untouched".
+- **Both axes are logarithmic.** This is the important bit. On log-log axes a
+  power law $y = C\,x^{k}$ becomes a *straight line of slope $k$*. So we are not
+  reading off values here — we are reading off **exponents**, and the two grey
+  guide lines have slope 1 and slope 2.
+
+Now the two curves:
+
+- The **isotropic** direction (red) follows **slope 1**. Double $\|\delta\|$ and
+  you double the damage. The step has a non-zero component in the row space of
+  $J$, so $J\delta \neq 0$ and the loss changes at *first* order.
+- The **projected** direction (blue) follows **slope 2**. Double $\|\delta\|$ and
+  the damage *quadruples* — which sounds worse until you notice it starts from a
+  vastly lower base. Slope 2 is the signature of the first-order term being
+  exactly zero: $J\delta = 0$, so all that remains is curvature. **That is
+  Lemma 4.3.**
+
+The vertical gap between the curves at any given $\|\delta\|$ is the practical
+payoff, and because the slopes differ that gap *widens* as you step more finely.
+At $\|\delta\| = 10^{-2}$ it is already several orders of magnitude.
+
+One edge of the plot is an artefact rather than physics, and it is the important
+one. On the **far right**, past the dotted line, the blue curve steepens sharply
+and climbs toward the red. The linear regime has ended: the Taylor expansion the
+whole argument rests on is no longer valid, so Lemma 4.3 makes no claim there, and
+the projected direction loses its advantage. **This is exactly where $\alpha^*$
+puts you** — the annotation shows it lands off the right edge entirely — and that
+is the trap.
+
+(We are running in float64 here, so both curves stay clean down to $10^{-11}$. In
+fp32 the blue curve would flatten into a noise floor around $10^{-7}$; if you see
+that in your own runs, it is arithmetic, not physics.)
 
 Note that on *this* toy problem no row of the table escapes: with $P = 321$
 and $\|\theta_{map}\|^2 \approx 58$, even a full-rank $J^L$ leaves

@@ -1,0 +1,64 @@
+[project]
+name = "llm-fully-correlated-posteriors"
+version = "0.1.0"
+description = "Fully correlated projected posteriors for small LLMs (SmolLM2), following Miani, Roy & Hauberg (2024), arXiv:2410.16901"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "transformers>=4.57.0,<5",
+    "peft>=0.17.0",
+    "datasets>=4.0.0",
+    "accelerate>=1.10.0",
+    "safetensors>=0.6.0",
+    "numpy>=2.1.0",
+    "tqdm>=4.67.0",
+    "matplotlib>=3.9.0",
+    "pytest>=8.3.0",
+    "ipykernel>=6.30.0",
+    "nbformat>=5.10.0",
+    "nbconvert>=7.16.0",
+    "jupyterlab>=4.4.0",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "torch>=2.9.1",
+]
+gpu = [
+    "torch>=2.9.1",
+]
+
+[tool.uv]
+package = true
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "gpu" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu128", extra = "gpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

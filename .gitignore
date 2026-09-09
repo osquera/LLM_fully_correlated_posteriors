@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+uv.lock
+checkpoints/*.pt
+checkpoints/*.safetensors
+samples/
+figures/*.pdf
+figures/*.png
+.pytest_cache/
+.mypy_cache/

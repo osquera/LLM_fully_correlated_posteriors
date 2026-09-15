@@ -92,8 +92,11 @@ def main():
             n_probes=8, n_iterations=args.n_iterations,
             acceleration=not args.no_acceleration, seed=args.seed,
         )
-        alpha = optimal_alpha(theta, space, kdim)
+        alpha = optimal_alpha(theta, space, kdim, n_probes=8)
         print(f"Lemma 3.4: kernel_dim ~ {kdim:.1f} / P = {space.P}  =>  alpha* = {alpha:.6e}")
+        print(f"           implied rank(J^L) = {space.P - kdim:.1f}, "
+              f"probe std = {(2 * kdim / 8) ** 0.5:.1f} -- if those are comparable, "
+              f"prefer --alpha from a measured ||delta|| sweep (README: alpha trap)")
     else:
         alpha, kdim = args.alpha, float("nan")
         print(f"using supplied alpha = {alpha:.6e}")

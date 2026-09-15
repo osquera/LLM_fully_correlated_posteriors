@@ -356,7 +356,7 @@ $x$ have $|\cos|$ close to 1 — those training points are telling us almost the
 *same* thing about which weights matter — while far-apart points are nearly
 orthogonal. The median off-diagonal $|\cos|$ is about $0.63$, which is enormous
 for vectors in a 321-dimensional space (two random directions there would give
-$pprox 0.06$). That redundancy is why the effective rank sits far below $N$, and
+$\approx 0.06$). That redundancy is why the effective rank sits far below $N$, and
 it is the seed of the convergence failure we diagnose in §6.1. Hold on to this
 panel — we will come back to it.
 """)
@@ -1147,8 +1147,9 @@ it never considers sequence models. Our `make_causal_lm_loss` implements both:
 | `"sequence"` | $N$ (mean NLL per sequence) | cheapest, matches Eq. 14 | largest |
 | `"token"` | $N \cdot T$ (each token's NLL) | $T\times$ more | tighter, stronger guarantee |
 
-Section 6 gives a concrete reason to prefer `"token"` that has nothing to do with
-the guarantee.
+Section 6.2 gives a concrete reason to *avoid* `"token"` that has nothing to do
+with the guarantee: more rows means a larger posterior sample, not a smaller
+one.
 """)
 
 # =============================================================================
@@ -1302,15 +1303,56 @@ Lemma 3.4 gives the prior precision in closed form, no optimisation needed:
 
 $$\alpha^* = \frac{\|\theta_{\text{map}}\|^2}{P - \operatorname{Tr}(I - \mathcal{P}(\text{GGN}))} = \frac{\|\theta_{\text{map}}\|^2}{\operatorname{rank}(J^L)}$$
 
-Look at that denominator. Under `mode="sequence"`, $\operatorname{rank}(J^L) = N$
-— just the number of training sequences. When $P \gg N$ (always, for LoRA), the
-denominator is tiny, so $\alpha^*$ is tiny, so the posterior is **enormous**.
+The question that matters in practice is how big a sample that implies. The
+covariance is $\alpha^{-1} U U^\top$ and $U U^\top$ is a projector of rank
+$P - \operatorname{rank}$, so
 
-A sample has norm $\approx \sqrt{P/\alpha}$. Plug in our real measurement from the
-LoRA smoke test ($P = 2048$, $N = 16$, $\alpha^* = 0.64$) and you get
-$\|\delta\| \approx 57$. That is nowhere near the linear regime where Lemma 4.3
-applies — so the guarantee evaporates, and projected samples degrade the loss
-about as badly as isotropic ones.
+$$\mathbb{E}\|\delta\|^2 \;=\; \alpha^{-1}\operatorname{tr}(U U^\top) \;=\; \frac{P - \operatorname{rank}}{\alpha^*} \;=\; \frac{\operatorname{rank}\,(P - \operatorname{rank})}{\|\theta_{\text{map}}\|^2}$$
+
+> **Where the sign actually flips.** The obvious shortcut here is
+> $\|\delta\| \approx \sqrt{P/\alpha}$, which assumes the kernel is all of
+> $\mathbb{R}^P$. That is wrong — the kernel is only $P - \operatorname{rank}$
+> dimensional — but in the $\operatorname{rank} \ll P$ regime it is wrong by
+> well under a percent, and it predicts the same growth in rank. It is not what
+> bit us.
+>
+> The real error in an earlier draft was on $\alpha^*$ itself: that draft claimed
+> `mode="token"` *raises* $\alpha^*$ by a factor of $T$. Read the closed form
+> again — $\alpha^* = \|\theta_{\text{map}}\|^2 / \operatorname{rank}(J^L)$ — so
+> multiplying the rows by $T$ *divides* $\alpha^*$ by $T$. The kernel term and
+> the $\alpha^{-1}$ term do not fight each other; they both say the same thing,
+> and the recommendation that followed was exactly backwards.
+
+Read off the consequences:
+
+- $\|\delta\|$ peaks at $\operatorname{rank} = P/2$, and vanishes as
+  $\operatorname{rank} \to P$ — at which point there is no kernel left to sample
+  from, so there is no uncertainty either.
+- For $\operatorname{rank} \ll P$ — the regime every LoRA setup is in —
+  $\|\delta\| \approx \sqrt{\operatorname{rank} \cdot P} / \|\theta_{\text{map}}\|$,
+  which **grows** with the number of rows.
+
+On the LoRA smoke test ($P = 2048$, exact $\operatorname{rank}(J^L) = 16$,
+$\|\theta_{\text{map}}\|^2 = 5.36$) that gives $\alpha^* = 0.33$ and
+$\|\delta\| = 78$ — nowhere near the linear regime where Lemma 4.3 applies, so
+the guarantee evaporates and projected samples degrade the loss about as badly
+as isotropic ones. (The script itself reports a second, smaller figure from the
+*estimated* kernel dimension rather than the exact rank. That discrepancy is not
+rounding; §6.3 takes it apart.)
+
+That is algebra, but it matches the measurement. `figures/compare_methods.json`
+-- from `scripts/compare_methods.py`, which reads the rank off the exact SVD
+rather than a probe -- records `alpha = 0.3349` and a sample norm of `78.02`,
+identical for the exact and the iterative route.
+
+Note what is actually driving this. It is not $P \gg N$, and — despite
+appearances — not $P$ either. Rearranged as
+$\|\delta\| \approx \sqrt{\operatorname{rank} / (\|\theta_{\text{map}}\|^2/P)}$,
+the only quantities left are the row count and the *per-parameter* mean square
+of $\theta_{\text{map}}$, which for LoRA is fixed at roughly its initialisation
+value: `lora_B` starts at zero and stays near it, so the norm is carried by
+`lora_A`, whose Kaiming init scales with $P$ and cancels it. The "ways out"
+below carry the measured sweep.
 """)
 
 code(r"""
@@ -1330,14 +1372,19 @@ for nrm in np.logspace(-4, 1, 60):
 print(f"||theta_map||^2 = {theta_norm_sq:.3f},  P = {P}")
 print(f"measured linear-regime limit: ||delta|| < {limit:.3g}"
       f"   (where train MSE moves by 10%)\n")
-print(f"{'rank(J^L)':>10} {'alpha*':>12} {'implied ||delta||':>18}  verdict")
-for r_ in sorted({len(batches), N, 4 * N, P // 2, P}):
+# ||delta||^2 = alpha^-1 * tr(U U^T) = alpha^-1 * (P - rank). The kernel shrinks
+# as the rank grows -- worth under a percent when rank << P, but it is what makes
+# the curve below turn over rather than climb forever.
+print(f"{'rank(J^L)':>10} {'kernel dim':>11} {'alpha*':>12} {'||delta||':>11}  verdict")
+for r_ in sorted({len(batches), N, 4 * N, P // 2, int(0.97 * P)}):
     a = theta_norm_sq / max(r_, 1)
-    nrm = (P / a) ** 0.5
-    print(f"{r_:10d} {a:12.4e} {nrm:18.3f}  "
+    nrm = ((P - r_) / a) ** 0.5
+    print(f"{r_:10d} {P - r_:11d} {a:12.4e} {nrm:11.3f}  "
           f"{'OK' if nrm < limit else 'outside linear regime'}")
-print("\nmode='sequence' puts rank(J^L) = N, at the top of this table.")
-print("mode='token' multiplies it by the sequence length T, moving you down.")
+print(f"\n||delta|| = sqrt(rank * (P - rank)) / ||theta_map||, so it peaks at")
+print(f"rank = P/2 = {P // 2} and vanishes as rank -> P (no kernel left to sample).")
+print("In the rank << P regime -- where every LoRA setup lives -- MORE rows means")
+print("a BIGGER posterior. mode='token' multiplies rank by T and so makes this worse.")
 """)
 
 code(r"""
@@ -1379,7 +1426,7 @@ ax.axvspan(limit, norms[-1], color="orange", alpha=0.10)
 ax.annotate("linear regime ends\n(Taylor expansion invalid,\nLemma 4.3 says nothing)",
             (limit * 1.12, min(c_ker) * 30), fontsize=7.5, color="darkorange")
 
-alpha_star_norm = (P / (theta_norm_sq / N)) ** 0.5
+alpha_star_norm = ((P - N) / (theta_norm_sq / N)) ** 0.5
 if alpha_star_norm <= norms[-1]:
     ax.axvline(alpha_star_norm, color="tab:purple", ls="-.", lw=1.2)
 else:
@@ -1445,24 +1492,55 @@ is the trap.
 fp32 the blue curve would flatten into a noise floor around $10^{-7}$; if you see
 that in your own runs, it is arithmetic, not physics.)
 
-Note that on *this* toy problem no row of the table escapes: with $P = 321$
-and $\|\theta_{map}\|^2 \approx 58$, even a full-rank $J^L$ leaves
-$\|\delta\| \approx 42$ against a measured linear-regime limit of $0.9$. That
-is the trap in its most severe form: when $P$ is small and $\|\theta_{map}\|$ is
-sizeable, Lemma 3.4 cannot produce a usable $\alpha$ at all. At realistic scale
-the ratio is friendlier, but you must check it rather than assume it.
+On *this* toy problem essentially no row of the table escapes. Note that the
+table is symmetric — $\operatorname{rank}$ and $P - \operatorname{rank}$ enter
+the identity the same way — so the smallest and the largest rank tie at the
+bottom, and they get there for opposite reasons: too few rows to constrain
+anything, versus no kernel left to sample from. Everywhere in between is worse,
+and every row sits far above the measured linear-regime limit that the cell
+above prints. That is the trap in its most severe form. At realistic scale the
+ratio is friendlier — but you must measure it rather than assume it.
 
-**Three ways out, in order of preference:**
+**Ways out, in order of preference:**
 
-1. **Use `mode="token"`.** Rank becomes $N \cdot T$ instead of $N$, which
-   simultaneously tightens the kernel and lifts $\alpha^*$ by a factor of $T$.
-   This is the strongest practical argument for the per-token variant.
-2. **Increase $N$** until $\operatorname{rank}(J^L)$ is a real fraction of $P$.
-3. **Set $\alpha$ by hand** and report a sensitivity sweep.
+1. **Set $\alpha$ from a measurement, not from Lemma 3.4.** Sweep $\|\delta\|$ on
+   the real model, find where the worst per-datum loss change crosses your
+   tolerance, and choose $\alpha$ to land inside. It costs one kernel direction
+   and a line search, and it is the only approach here that reliably works.
+2. **Use fewer projection rows, not more** — which follows from the identity
+   above, and is the opposite of what intuition suggests. It is not free: fewer
+   rows leave a larger kernel, so fewer of the directions you draw are genuinely
+   loss-neutral and Lemma 4.3 covers less of the posterior. You are trading the
+   guarantee for the scale, not getting both.
+3. **Take $\operatorname{rank}$ from an exact SVD** rather than a Hutchinson
+   probe, whenever the dense $J^L$ fits — for reasons §6.3 makes concrete.
 
-This is not a flaw in the paper. It targets $P \gg N \cdot O$ with $O$ *large*, so
-$\operatorname{rank} = N \cdot O$ is substantial there. A causal LM under
-per-sequence loss collapses $O$ to 1 — exactly where the closed form degenerates.
+**Shrinking $P$ does not work**, even though the identity looks like it promises
+exactly that. For LoRA, $\|\theta_{\text{map}}\|^2$ is almost entirely `lora_A`
+(`lora_B` is initialised to zero and stays near it), and Kaiming init makes
+$\|A\|^2$ grow in proportion to $P$. The ratio $\|\theta_{\text{map}}\|^2/P$ is
+therefore a constant of the initialisation, and rewriting the identity in the
+$\operatorname{rank} \ll P$ regime as
+
+$$\|\delta\| \;\approx\; \sqrt{\frac{\operatorname{rank}}{\|\theta_{\text{map}}\|^2 / P}}$$
+
+leaves no $P$ in it at all. Measured on the smoke-test adapter, sweeping LoRA
+$r$ from 2 to 32 — a sixteen-fold change in $P$ — moves
+$\|\theta_{\text{map}}\|^2/P$ between 0.0026 and 0.0027 and $\|\delta\|$ at
+$\operatorname{rank}=16$ between 75.8 and 78.4. Three percent. The lever is the
+*per-parameter* scale of $\theta_{\text{map}}$, never the parameter count.
+
+**Do not reach for `mode="token"` here.** It multiplies the rank by $T$, which
+*increases* $\|\delta\|$, and it makes the dense $J^L$ far too large to factor,
+forcing you onto the iterative projection that §6.1 shows can stall outright.
+
+This is not a flaw in the paper. It targets $P \gg N\cdot O$ with $O$ *large*, so
+$\operatorname{rank} = N \cdot O$ is substantial and $\theta_{\text{map}}$ is a
+whole network's worth of trained weights — large per parameter. A causal LM with
+LoRA collapses $O$ to 1 *and* pins the per-parameter scale at its initialisation
+value; both terms move the wrong way at once. Characterising when the closed form
+is usable, and what replaces it when it is not, is one of the open questions in
+§7.
 """)
 
 md(r"""
@@ -1514,9 +1592,37 @@ md(r"""
 The estimates scatter exactly as $\sqrt{2\,\text{rank}/k}$ predicts, and tighten
 as $1/\sqrt{k}$. So a handful of probes is dangerously noisy on a small problem
 but perfectly fine at LLM scale, where a kernel dimension of $10^6$ gets 0.05%
-relative error from 8 probes. Good news for the real use case; a trap in unit
-tests, which is why ours asserts a $4\sigma$ statistical bound rather than an
-exact match.
+relative error from 8 probes. That is good news if the kernel dimension is what
+you need — and for $\alpha^*$ it is not, as the next paragraph shows. It is also
+a trap in unit tests, which is why ours asserts a $4\sigma$ statistical bound
+rather than an exact match.
+
+#### The relative error that matters is not the one we just measured
+
+That table is reassuring about the wrong quantity. $\alpha^*$ does not divide by
+$\operatorname{Tr}(I - \mathcal{P})$, it divides by
+$P - \operatorname{Tr}(I - \mathcal{P})$, and when $\operatorname{rank} \ll P$
+that is a small difference between two large numbers. The *absolute* error
+carries across untouched:
+
+$$\operatorname{std}(\widehat{\operatorname{rank}}) \;=\; \operatorname{std}(\widehat{\text{kernel dim}}) \;=\; \sqrt{2\,\text{kernel dim}\,/\,k}$$
+
+so the 0.05% relative error on a kernel dimension of $10^6$ is $\pm 500$ on a
+rank that may itself be a few hundred. On the LoRA smoke test ($P = 2048$, exact
+$\operatorname{rank} = 16$) a single run gives three readings of the same number:
+the exact batch factorisations say **16**, the 4-probe estimate implies **8**, and
+the sampler's own estimate implies **42**. The predicted std is
+$\sqrt{2 \cdot 2032 / 4} = 32$, so all three are consistent with $16 \pm 32$ and
+none of them is usable. At the target scale ($P = 460{,}800$,
+$\operatorname{rank} = N = 256$, 8 probes) the std is $339$ and the estimate can
+come out *negative* — at which point `optimal_alpha` clamps it to 1 and returns
+$\alpha = \|\theta_{\text{map}}\|^2$.
+
+So the estimator degenerates before the formula does, and it degenerates in the
+direction that looks safest: scaling $P$ up shrinks the relative error on the
+kernel dimension and grows it on $\alpha^*$. `optimal_alpha` now takes an
+optional `n_probes` and warns when the implied rank falls within $3\sigma$ of
+zero. When the dense $J^L$ fits, take the rank from its SVD instead — §6.4.
 
 ### 6.4 If the dense $J^L$ fits in memory, don't iterate at all
 
@@ -1552,10 +1658,10 @@ def dense_J_gb(rows, P_, bytes_per=4):
 
 print(f"{'setting':<44} {'rows R':>9} {'dense J^L':>12}  verdict")
 for label, rows_, P_ in [
-    ("LoRA, mode=sequence, N=256",                256,      2_000_000),
-    ("LoRA, mode=sequence, N=4096",               4096,     2_000_000),
-    ("LoRA, mode=token, N=256, T=256",            256 * 256, 2_000_000),
-    ("full 135M model, mode=sequence, N=256",     256,      135_000_000),
+    ("LoRA r=8 q,v, mode=sequence, N=256",        256,       460_800),
+    ("LoRA r=8 q,v, mode=sequence, N=4096",       4096,      460_800),
+    ("LoRA r=8 q,v, mode=token, N=256, T=256",    256 * 256, 460_800),
+    ("full 135M model, mode=sequence, N=256",     256,       135_000_000),
 ]:
     gb = dense_J_gb(rows_, P_)
     verdict = "exact SVD" if gb < 8 else "alternating projections"
@@ -1574,8 +1680,9 @@ The paper's title promises *fully correlated* posteriors. That's the contrast wi
 mean-field (diagonal) approximations, which assume every weight is independent.
 Because we can build the covariance exactly from the SVD, we can just look.
 
-Run `scripts/visualize_posterior.py --loss-mode token` for the full six-panel
-figure on the real LoRA model. Here is the same idea at demo scale.
+Run `scripts/visualize_posterior.py --loss-mode sequence` for the full six-panel
+figure on the real LoRA model (same loss mode you sampled with, or the picture
+describes a posterior you never drew from). Here is the same idea at demo scale.
 """)
 
 code(r"""
@@ -1651,7 +1758,7 @@ uv sync --extra gpu                          # CPU wheels will be ~50x slower
 
 python scripts/finetune_lora.py              # 1. theta_map (LoRA adapters only)
 python scripts/sample_posterior.py \          # 2. draw from the projected posterior
-       --loss-mode token --n-iterations 500
+       --loss-mode sequence --n-iterations 500
 python scripts/eval_underfitting.py          # 3. test Lemmas 4.3 and 3.2
 python scripts/compare_methods.py            # 4. baselines, with timings
 python scripts/visualize_posterior.py        # 5. the six-panel figure

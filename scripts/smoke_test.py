@@ -56,8 +56,11 @@ for mode in ("sequence", "token"):
               f"{kernel_residual(v, f, theta, space, batches):.4e}")
 
     if mode == "sequence":
-        kdim = estimate_kernel_dim(f, theta, space, batches, fac, n_probes=4, n_iterations=300)
-        alpha = optimal_alpha(theta, space, kdim)
+        N_PROBES = 4
+        kdim = estimate_kernel_dim(f, theta, space, batches, fac,
+                                   n_probes=N_PROBES, n_iterations=300)
+        alpha = optimal_alpha(theta, space, kdim, n_probes=N_PROBES)
+        theta_norm_sq = float(sum((t_ ** 2).sum() for t_ in theta.values()))
         print(f"  Lemma 3.4: kernel_dim ~ {kdim:.0f}/{space.P}  alpha* = {alpha:.4e}")
 
         deltas, info = sample_projected_posterior(
@@ -87,11 +90,26 @@ for mode in ("sequence", "token"):
             a, c = dloss(vdir * nrm), dloss(udir * nrm)
             print("  %10.0e %13.4e %13.4e %7.1fx" % (nrm, a, c, c / a))
 
+        # Two readings of the same quantity. The exact rank comes from the batch
+        # factorisations; the probe-based one is what optimal_alpha actually
+        # used above. They disagree because alpha* divides by P - kernel_dim, a
+        # small difference of two large numbers: the probe is accurate to a
+        # fraction of a percent on kernel_dim and still useless on the rank.
         total_rank = sum(a.rank for a in fac)
+        probe_rank = space.P - kdim
+        probe_sigma = (2.0 * kdim / N_PROBES) ** 0.5
         print()
-        print("  NOTE: rank(J^L) = %d but P = %d, so the projection removes only"
-              % (total_rank, space.P))
-        print("  %d of %d directions, and alpha* = ||theta||^2 / rank is correspondingly"
-              % (total_rank, space.P))
-        print("  small (%.3g), giving ||delta|| ~ %.0f. See README 'The alpha scaling trap'."
-              % (alpha, (space.P / alpha) ** 0.5))
+        print("  NOTE: alpha* = ||theta||^2 / rank(J^L), and E||delta||^2 = "
+              "(P - rank) / alpha*, so")
+        print("  ||delta|| ~ sqrt(rank / (||theta||^2 / P)): MORE rows means a BIGGER"
+              " posterior.")
+        print("  %13s %8s %10s %10s" % ("rank(J^L)", "source", "alpha*", "||delta||"))
+        for label, r_ in (("exact", total_rank), ("%d probes" % N_PROBES, probe_rank)):
+            a_ = theta_norm_sq / max(r_, 1.0)
+            print("  %13.1f %8s %10.3g %10.1f"
+                  % (r_, label, a_, ((space.P - r_) / a_) ** 0.5))
+        print("  probe std is %.1f, i.e. rank = %d +/- %.0f -- the two readings above are"
+              % (probe_sigma, total_rank, probe_sigma))
+        print("  statistically consistent and both unusable. ||theta||^2 = %.2f, P = %d."
+              % (theta_norm_sq, space.P))
+        print("  See README 'The alpha scaling trap'.")

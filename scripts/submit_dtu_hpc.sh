@@ -45,10 +45,17 @@ uv run python scripts/finetune_lora.py \
     --epochs 3
 
 # ---- stage 2: posterior samples ----
-# --loss-mode token raises rank(J^L) from N to N*T, which both tightens the
-# kernel and lifts alpha* out of the degenerate regime (README: alpha trap).
+# Sequence mode: dense J^L stays small enough for the exact SVD route, and it
+# keeps rank low -- which keeps ||delta|| down (README: alpha scaling trap).
+#
+# This run still takes alpha from Lemma 3.4, which at this scale is estimated
+# rather than known: with P = 460,800 and rank = N = 256, the 8-probe std on
+# kernel_dim is ~339, so the implied rank is mostly noise. sample_posterior.py
+# prints both numbers -- if they are comparable, do not trust the closed form.
+# Sweep ||delta|| against the worst per-datum loss change and re-run with an
+# explicit --alpha (README: "The estimator degenerates before the formula does").
 uv run python scripts/sample_posterior.py \
-    --loss-mode token \
+    --loss-mode sequence \
     --n-train 256 \
     --proj-batch-size 8 \
     --n-samples 16 \
@@ -58,7 +65,9 @@ uv run python scripts/sample_posterior.py \
 # ---- stage 3: evaluation, baselines, figures ----
 uv run python scripts/eval_underfitting.py
 uv run python scripts/compare_methods.py --adapter checkpoints/smollm2_lora
+# Same loss mode as stage 2, or the figure shows a posterior for a J^L that was
+# never sampled. This script takes rank from an exact SVD, not from probes.
 uv run python scripts/visualize_posterior.py --adapter checkpoints/smollm2_lora \
-    --loss-mode token --out figures/posterior.pdf
+    --loss-mode sequence --out figures/posterior.pdf
 
 echo "done"

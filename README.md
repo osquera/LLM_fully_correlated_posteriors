@@ -34,7 +34,7 @@ uv run pytest -q
 ## Pipeline
 
 ```bash
-# 1. theta_map: LoRA fine-tune SmolLM2-135M. theta = adapters only (P ~ 1-5M).
+# 1. theta_map: LoRA fine-tune SmolLM2-135M. theta = adapters only (P = 460,800).
 uv run python scripts/finetune_lora.py --model HuggingFaceTB/SmolLM2-135M
 
 # 2. Draw from q(theta) = N(theta_map, alpha^-1 U_L U_L^T).
@@ -48,7 +48,7 @@ uv run python scripts/eval_underfitting.py
 uv run python scripts/compare_methods.py --adapter checkpoints/smollm2_lora
 
 # 5. Six-panel diagnostic figure (correlation heatmaps, spectra, Lemma 4.3 curve).
-uv run python scripts/visualize_posterior.py --adapter checkpoints/smollm2_lora --loss-mode token
+uv run python scripts/visualize_posterior.py --adapter checkpoints/smollm2_lora --loss-mode sequence
 ```
 
 On DTU HPC: `bsub < scripts/submit_dtu_hpc.sh` runs all of the above.
@@ -89,10 +89,11 @@ independent check on the iterative implementation. But the exact route is
   `--max-gb`) -> use `llmproj.baselines.exact_projection_samples`.
 - It does not fit -> use `sample_projected_posterior` (alternating projections).
 
-For `mode="sequence"` with `N=256` and a LoRA `P` of 2M, dense `J` is ~2 GB:
-fits. Under `mode="token"` with `T=256`, `R` becomes 65k and dense `J` is ~500 GB:
-does not fit, and the alternating projection is the only option. That is exactly
-the trade-off the paper's algorithm exists to solve.
+The defaults here are SmolLM2-135M with `r=8` on `q_proj`/`v_proj`, i.e.
+`P = 30 * 8 * (1152 + 768) = 460,800`. For `mode="sequence"` with `N=256`, dense
+`J` is ~0.47 GB: fits. Under `mode="token"` with `T=256`, `R` becomes 65k and
+dense `J` is ~121 GB: does not fit, and the alternating projection is the only
+option. That is exactly the trade-off the paper's algorithm exists to solve.
 
 The baselines are cheap because they reuse that same dense `J`; neither needs
 its own pass over the data.
@@ -138,13 +139,96 @@ von Neumann `acceleration` (default on) only helps past a few hundred sweeps
 ## The alpha scaling trap
 
 Lemma 3.4 gives `alpha* = ||theta_map||^2 / (P - Tr(I - P(GGN)))`, and that
-denominator is `rank(J^L)`. Under `mode="sequence"` the rank is just `N`, the
-number of training sequences, so when `P >> N` the closed form returns a **very
-small alpha** -- an enormous prior variance. Measured on the smoke test
-(`P = 2048`, `N = 16`): `alpha* = 0.64`, giving `||delta|| = sqrt(P/alpha) ~ 57`.
-That is far outside the linear regime, where Lemma 4.3's `O(||delta||^2)`
-guarantee is worthless: projected and unprojected samples then degrade the loss
-about equally.
+denominator is `rank(J^L)`. Since the covariance is `alpha^-1 U U^T` with
+`U U^T` a projector of rank `P - rank`, the typical sample size is
+
+```
+E||delta||^2 = alpha^-1 * tr(U U^T) = alpha^-1 * (P - rank)
+             = rank * (P - rank) / ||theta_map||^2
+```
+
+Two things follow:
+
+1. `||delta||` peaks at `rank = P/2` and vanishes as `rank -> P`.
+2. **In the regime `rank << P` -- which is the regime every LoRA setup is in --
+   `||delta||` GROWS with rank**, roughly as `sqrt(rank * P) / ||theta_map||`.
+
+Point 2 is what an earlier version of this README got backwards, and it is worth
+being precise about why. The error was *not* the `P` versus `P - rank`
+distinction: when `rank << P` those two agree to well under a percent, and
+either one gives `||delta|| ~ sqrt(rank * P) / ||theta_map||`. The error was a
+sign slip on the closed form itself. The old text claimed `mode="token"`
+*raises* `alpha*` by a factor of `T`; since `alpha* = ||theta_map||^2 / rank`,
+multiplying the rows by `T` *divides* `alpha*` by `T`. More rows, bigger
+posterior.
+
+Measured on the smoke test (`P = 2048`, exact `rank(J^L) = 16`,
+`||theta_map||^2 = 5.36`): `alpha* = 0.33`, giving `||delta|| = 78`. That is far
+outside the linear regime, where Lemma 4.3's `O(||delta||^2)` guarantee is
+worthless: projected and unprojected samples then degrade the loss about
+equally. (`scripts/smoke_test.py` prints that row beside a second one computed
+from the *estimated* kernel dimension, which gives `alpha* = 0.64` and
+`||delta|| = 56` from the same run. That gap is not rounding -- see below.)
+
+That prediction is not just algebra: `figures/compare_methods.json`, recorded by
+`scripts/compare_methods.py` -- which takes the rank from the exact SVD
+(`n_rows: 16`) rather than from probes -- has `alpha: 0.3349` and a *measured*
+sample norm of `78.02`, from both the exact and the iterative route.
+
+### What actually sets the scale
+
+In the `rank << P` regime the identity rearranges to
+
+```
+||delta|| ~ sqrt( rank / (||theta_map||^2 / P) )
+```
+
+so only two quantities matter: the number of loss rows, and the *per-parameter*
+mean square of `theta_map`. `P` itself cancels. That is not an asymptotic
+argument, it is measurable. LoRA's `||theta_map||^2` is almost entirely
+`lora_A` -- `lora_B` is initialised to zero and stays near it -- and Kaiming
+init makes `||lora_A||^2` grow in proportion to `P`:
+
+| LoRA `r` | `P` | `||theta_map||^2` | per-param | `||delta||` at `rank=16` |
+|---:|---:|---:|---:|---:|
+| 2 | 1,024 | 2.81 | 0.0027 | 75.8 |
+| 4 | 2,048 | 5.36 | 0.0026 | 77.9 |
+| 8 | 4,096 | 10.90 | 0.0027 | 77.4 |
+| 16 | 8,192 | 21.49 | 0.0026 | 78.0 |
+| 32 | 16,384 | 42.61 | 0.0026 | 78.4 |
+
+(Smoke-test config: 2 layers, `q_proj`/`v_proj`, at initialisation.) A sixteen-
+fold change in `P` moves `||delta||` by three percent. **Shrinking the adapter
+does not help** -- the per-parameter scale is set by the LoRA init, not by the
+parameter count. The driver is not `P >> N`, and not `P` at all: it is that
+`theta_map` is small *per parameter*, which for LoRA is structural.
+
+### The estimator degenerates before the formula does
+
+`alpha*` divides by `P - kernel_dim`, and `kernel_dim` comes from a Hutchinson
+probe whose standard deviation is `sqrt(2 * kernel_dim / k)` on `k` probes. The
+denominator is therefore a small difference between two large, noisy numbers.
+A single smoke-test run yields three estimates of the same rank:
+
+| source | kernel dim | implied rank |
+|---|---:|---:|
+| exact, `sum(a.rank for a in fac)` | 2032 | **16** |
+| `estimate_kernel_dim`, 4 probes | 2040 | 8 |
+| sampler's `kernel_dim_est` | 2005.7 | 42 |
+
+The predicted probe std is `sqrt(2 * 2032 / 4) = 32`, so `rank = 16 +/- 32`:
+all three readings are statistically consistent, and all three are useless. At
+the target scale it is worse, not better. With `P = 460,800`, `rank = N = 256`
+and 8 probes the std is `sqrt(2 * 460,544 / 8) = 339`, so the estimate can come
+out negative -- at which point `optimal_alpha` clamps with `max(rank, 1.0)` and
+returns `alpha = ||theta_map||^2`.
+
+Relative accuracy on `kernel_dim` is excellent and entirely beside the point.
+What `alpha*` needs is relative accuracy on `P - kernel_dim`, and that is a
+catastrophic cancellation. `optimal_alpha` now warns when the estimated rank
+falls within `3 sigma` of zero; pass `n_probes` to enable the check.
+
+### Ways out
 
 The projection itself is sound; the *scale* is what breaks. Verified at matched
 `||delta||` on the tiny Llama, projected vs isotropic direction:
@@ -157,20 +241,31 @@ The projection itself is sound; the *scale* is what breaks. Verified at matched
 
 The projected column floors at ~1e-6, i.e. fp32 resolution: the loss is
 preserved to machine precision. The ratio shrinks at 1e-3 only because of that
-floor, not because the projection got worse.
+floor, not because the projection got worse. So, in order of preference:
 
-Three ways out, in order of preference:
+1. **Set `--alpha` from a measurement, not from Lemma 3.4.** Sweep `||delta||`
+   on the real model, find where the worst per-datum loss change exceeds your
+   tolerance, and pick `alpha` to land inside that. This is the only method here
+   that reliably works, and it is cheap: one kernel direction and a line search.
+2. **Use fewer projection rows, not more.** Counter-intuitive, but it follows
+   from the identity above: in the `rank << P` regime, adding rows inflates the
+   posterior. It is not free -- fewer rows means a larger kernel, so fewer of
+   the sampled directions are genuinely loss-neutral and the Lemma 4.3
+   guarantee covers less. This buys scale at the cost of the guarantee rather
+   than improving both.
+3. **Take `rank` from the exact SVD when the dense `J^L` fits.** That removes
+   the cancellation above, though not the scale problem.
 
-1. **Use `mode="token"`.** Rank becomes `N*T` instead of `N`, which tightens the
-   kernel *and* raises `alpha*` by a factor of `T`. This is the main practical
-   argument for the per-token variant.
-2. **Increase `N`** until `rank(J^L)` is a meaningful fraction of `P`.
-3. **Override `--alpha`** and report a sensitivity sweep, rather than trusting
-   the closed form in a regime it was not designed for.
+**Do NOT reach for `mode="token"` to fix this.** It multiplies rank by `T`,
+which makes `||delta||` larger, and it forces you onto the iterative projection
+(dense `J^L` no longer fits) which can stall -- see the convergence section.
+An earlier version of this README recommended exactly that, wrongly.
 
 This is not a flaw in the paper: it targets `P >> N*O` with `O` large, so
-`rank = N*O` is substantial there. A causal LM under `mode="sequence"` collapses
-`O` to 1, which is exactly where the closed form degenerates. Worth writing up.
+`rank = N*O` is substantial and `||theta_map||` is a full network's worth of
+trained weights, large per parameter. A causal LM with LoRA collapses `O` to 1
+*and* pins the per-parameter scale at its initialisation value, which is where
+the closed form degenerates. Worth writing up.
 
 ## Open choice: what is "one datum" for a sequence model?
 
@@ -179,8 +274,9 @@ This is not a flaw in the paper: it targets `P >> N*O` with `O` large, so
 - `"sequence"` — one row per sequence (mean NLL over its tokens). Matches Eq. 14
   literally; `J^L` is `(N, P)`. **Start here.**
 - `"token"` — one row per token; `J^L` is `(N·T, P)`. Closer to the full-Jacobian
-  kernel of §4, `T×` the cost, and a strictly smaller kernel — so less posterior
-  spread, but a stronger loss-preservation guarantee.
+  kernel of §4 and a stronger per-token guarantee, but `T×` the cost, a dense
+  `J^L` far too large to factor directly, and — per the alpha section above — a
+  *larger* `||delta||` under Lemma 3.4, not a smaller one.
 
 The paper does not address sequence models, so this trade-off is unexplored and
 is a plausible contribution in itself.

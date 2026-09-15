@@ -608,6 +608,151 @@ different rates. Nothing in the method imposed that; it fell out of the geometry
 
 # =============================================================================
 md(r"""
+### A geometric recap: how $J$, the GGN and $\ker(J)$ fit together
+
+Before we build the algorithm, one picture that summarises everything above and
+should be worth re-reading later.
+
+Three objects live in three different places:
+
+- **The Jacobian** $J:\mathbb{R}^P \to \mathbb{R}^{NO}$ takes a *parameter*
+  perturbation and returns the resulting *prediction* change (stacked over the
+  training set).
+- **The GGN** $=J^\top J \in \mathbb{R}^{P\times P}$ is the pull-back to
+  parameter space. It is symmetric positive semidefinite, and $\ker(GGN) =
+  \ker(J^\top J) = \ker(J)$ — the same "safe" subspace, viewed differently.
+- **The kernel** $\ker(J) \subset \mathbb{R}^P$ is the null space itself: an
+  orthogonal complement of $\mathrm{row}(J^\top)$, of dimension $P - \mathrm{rank}(J)$.
+
+The parameter space splits cleanly:
+
+$$
+\mathbb{R}^P \;=\; \underbrace{\mathrm{row}(J^\top)}_{\text{prediction-changing}}
+\;\oplus\; \underbrace{\ker(J)}_{\text{prediction-preserving}}
+$$
+
+Every posterior sample $\theta = \theta_{map} + \delta$ decomposes as a piece in
+each. Diagonal/mean-field puts variance in both. The projected posterior puts
+variance only in $\ker(J)$, and the scale $\alpha^{-1}$ on it.
+""")
+
+code(r"""
+# A geometric summary of J, GGN and ker(J). Toy: P=3, output dim 2, so
+# rank(J) = 2, ker(J) is a line, row(J^T) is a plane -- exactly the picture
+# above, small enough to draw.
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers the 3d proj)
+
+J_toy = torch.tensor([[1.0,  0.4, 0.2],
+                      [0.3, -1.0, 0.5]])
+GGN_toy = J_toy.T @ J_toy                                # 3x3, rank 2
+evals, evecs = torch.linalg.eigh(GGN_toy)                # ascending; first is ~0
+kernel_dir = evecs[:, 0].numpy()                         # ker(J)
+row_basis  = evecs[:, 1:].numpy()                        # row(J^T) plane basis
+
+rng_np = np.random.default_rng(0)
+eps_toy = rng_np.standard_normal(3) * 1.25
+proj_ker = float(eps_toy @ kernel_dir) * kernel_dir
+proj_row = eps_toy - proj_ker
+
+fig = plt.figure(figsize=(13.5, 4.6))
+
+# (a) 3D: the decomposition R^P = row(J^T) + ker(J), with one sample.
+ax = fig.add_subplot(1, 3, 1, projection="3d")
+gg = np.linspace(-1.7, 1.7, 9)
+uu, vv = np.meshgrid(gg, gg)
+plane = uu[..., None] * row_basis[:, 0] + vv[..., None] * row_basis[:, 1]
+ax.plot_surface(plane[..., 0], plane[..., 1], plane[..., 2],
+                color="tab:red", alpha=0.13, edgecolor="tab:red", linewidth=0.15)
+tline = np.linspace(-1.8, 1.8, 2)[:, None] * kernel_dir
+ax.plot(tline[:, 0], tline[:, 1], tline[:, 2], color="tab:blue", lw=2.4)
+
+def _arrow(a, b, **kw):
+    ax.quiver(a[0], a[1], a[2], b[0]-a[0], b[1]-a[1], b[2]-a[2],
+              arrow_length_ratio=0.08, **kw)
+
+_arrow([0, 0, 0], eps_toy,  color="black",   lw=1.5)
+_arrow([0, 0, 0], proj_ker, color="tab:blue", lw=2)
+_arrow([0, 0, 0], proj_row, color="tab:red",  lw=2, alpha=0.75)
+ax.text(*(eps_toy * 1.07),      r"$\varepsilon$",                                 fontsize=11)
+ax.text(*(proj_ker * 1.20),     r"$UU^\top\varepsilon$" + "\n(kept)",             color="tab:blue", fontsize=9)
+ax.text(*(proj_row * 1.15),     r"$\mathcal{P}(GGN)\,\varepsilon$" + "\n(discarded)", color="tab:red", fontsize=9)
+ax.text(*(row_basis[:, 0] * 1.9), r"$\mathrm{row}(J^\top)$", color="tab:red", fontsize=10)
+ax.text(*(kernel_dir * 2.15),   r"$\ker(J)$",              color="tab:blue", fontsize=10)
+ax.set_xlim(-2, 2); ax.set_ylim(-2, 2); ax.set_zlim(-2, 2)
+ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
+ax.set_title(r"$\mathbb{R}^P = \mathrm{row}(J^\top) \oplus \ker(J)$", fontsize=11)
+
+# (b) Block schematic: what J does to each subspace.
+ax2 = fig.add_subplot(1, 3, 2)
+ax2.set_xlim(0, 10); ax2.set_ylim(0, 10); ax2.set_aspect("equal"); ax2.axis("off")
+ax2.add_patch(plt.Rectangle((0.4, 0.6), 3.6, 8.8, fc="white", ec="black", lw=1.2))
+ax2.text(2.2, 9.7, r"$\mathbb{R}^P$", fontsize=13, ha="center")
+ax2.add_patch(plt.Rectangle((0.4, 5.4), 3.6, 4.0, fc="tab:red",  ec="tab:red",  alpha=0.22))
+ax2.text(2.2, 7.4, "row$(J^\\top)$\ndim $=$ rank$(J)$", fontsize=9, ha="center")
+ax2.add_patch(plt.Rectangle((0.4, 0.6), 3.6, 4.8, fc="tab:blue", ec="tab:blue", alpha=0.22))
+ax2.text(2.2, 3.0, "ker$(J)$\ndim $= P -$ rank$(J)$",   fontsize=9, ha="center")
+ax2.annotate("", xy=(7.5, 7.4), xytext=(4.2, 7.4),
+             arrowprops=dict(arrowstyle="->", lw=1.4, color="tab:red"))
+ax2.text(5.85, 7.75, "$J$", fontsize=11, ha="center")
+ax2.add_patch(plt.Rectangle((7.5, 5.9), 2.1, 3.0, fc="tab:red", ec="tab:red", alpha=0.22))
+ax2.text(8.55, 7.4, r"$\mathbb{R}^{NO}$" + "\n(image)", fontsize=9, ha="center")
+ax2.annotate("", xy=(7.5, 3.0), xytext=(4.2, 3.0),
+             arrowprops=dict(arrowstyle="->", lw=1.4, color="tab:blue"))
+ax2.text(5.85, 3.35, "$J$", fontsize=11, ha="center")
+ax2.add_patch(plt.Circle((8.55, 3.0), 0.35, fc="tab:blue", alpha=0.35, ec="tab:blue"))
+ax2.text(8.55, 3.0, "$0$", fontsize=11, ha="center", va="center")
+ax2.set_title(r"$J$ maps $\ker(J)$ to $0$; that is the definition", fontsize=11)
+
+# (c) Spectra: GGN vs LLA covariance vs projected covariance.
+r_syn, P_syn = 40, 60
+sig2 = np.geomspace(50.0, 0.5, r_syn) ** 2          # non-zero eigenvalues of GGN
+alpha_syn = 1.0
+ev_ggn      = np.concatenate([np.sort(sig2)[::-1],           np.zeros(P_syn - r_syn)])
+ev_lla_cov  = np.concatenate([1.0 / (sig2 + alpha_syn),      np.full(P_syn - r_syn, 1.0 / alpha_syn)])
+ev_proj_cov = np.concatenate([np.zeros(r_syn),               np.full(P_syn - r_syn, 1.0 / alpha_syn)])
+
+ax3 = fig.add_subplot(1, 3, 3)
+ax3.semilogy(ev_ggn      + 1e-30, "o-",  ms=3, label="GGN eigenvalues",              color="tab:red")
+ax3.semilogy(ev_lla_cov,           "s--", ms=3, label=r"$(\mathrm{GGN}+\alpha I)^{-1}$", color="tab:orange")
+ax3.semilogy(ev_proj_cov + 1e-30, "^:",  ms=3, label=r"$\alpha^{-1}(I - \mathcal{P}(\mathrm{GGN}))$", color="tab:blue")
+ax3.axvline(r_syn - 0.5, color="grey", lw=0.8, ls=":")
+ax3.text(r_syn - 0.7, 1e-3, "rank$(J)$ cliff", fontsize=8, rotation=90,
+         ha="right", va="bottom", color="grey")
+ax3.set_xlabel("eigen-index (sorted)"); ax3.set_ylabel("value (log)")
+ax3.set_title(r"Projected covariance: only $0$ or $\alpha^{-1}$", fontsize=11)
+ax3.legend(fontsize=7, loc="lower left")
+
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+Reading the three panels together:
+
+- **Left.** A generic sample $\varepsilon$ has a part in the red plane (which
+  would change training predictions) and a part along the blue line (which
+  would not). The projector $UU^\top$ keeps only the blue part. Diagonal
+  Laplace keeps both.
+- **Middle.** The same picture as an operator: $J$ sends the red block to
+  something non-trivial in $\mathbb{R}^{NO}$, and *by definition* sends the
+  blue block to $0$. That is the entire content of "predictions preserved".
+- **Right.** The three covariances have very different spectra. The GGN itself
+  has a cliff at $\mathrm{rank}(J)$ — the many zero eigenvalues below the cliff
+  are the kernel. The LLA covariance $(GGN + \alpha I)^{-1}$ inverts, so those
+  zeros become the large value $\alpha^{-1}$; above the cliff it puts
+  intermediate variance $\bigl(\sigma_i^2 + \alpha\bigr)^{-1}$ — precisely the
+  "unsafe" variance the projected method removes. The projected covariance is
+  either $0$ or $\alpha^{-1}$, nothing between: a rescaled projector.
+
+**The loss-Jacobian variant we actually use.** Everything above with $J$ replaced
+by the loss-Jacobian $J^L$. Since $J^L$ collapses the $O$ output dimensions into
+one scalar loss per datum, its kernel is *larger* ($\ker(J) \subseteq \ker(J^L)$,
+Lemma 4.2): more posterior freedom, weaker guarantee (per-datum loss preserved
+instead of predictions preserved, Lemma 4.3). The picture is the same; the plane
+just gets thinner and the blue subspace gets fatter.
+""")
+
+# =============================================================================
+md(r"""
 ---
 ## 3. The algorithm: projecting without building the matrix
 

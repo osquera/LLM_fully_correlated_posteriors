@@ -1,0 +1,32 @@
+#!/bin/sh
+# Stage 2b: mode="token". J^L has 256 x 255 = 65,280 rows (~112 GB dense), so
+# this uses alternating projections. Same 256 sequences as stage 2a, so the two
+# modes differ only in what one row of J^L is.
+#
+# Runtime is NOT yet measured on GPU. Rough budget: per-batch (JJ^T)^+ needs
+# 2 * 2040 JVP/VJP passes for S = 8, times 32 batches; each sweep is ~2 passes
+# per batch. Watch progress with `bpeek`; if it will not fit, cut --n-samples
+# or --n-iterations before cutting --n-train (which would break comparability).
+# The kernel residual is printed per sample: section 6.1 of the walkthrough
+# shows the iteration can stall on highly correlated rows, as tokens are.
+#BSUB -J pb_token
+#BSUB -q gpuv100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_token.out
+#BSUB -e logs/%J_token.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/sample_posterior.py \
+    --loss-mode token \
+    --projector iterative \
+    --n-train 256 \
+    --proj-batch-size 8 \
+    --n-samples 8 \
+    --n-iterations 500 \
+    --tol 1e-3 \
+    --alpha-tol 0.01

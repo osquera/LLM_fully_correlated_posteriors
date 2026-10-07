@@ -1,0 +1,19 @@
+#!/bin/sh
+# Stage 1: theta_map. Fine-tunes on Alpaca train[:2000]; train[2000:] is held out.
+#BSUB -J pb_finetune
+#BSUB -q gpuv100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 3:00
+#BSUB -o logs/%J_finetune.out
+#BSUB -e logs/%J_finetune.err
+
+UV_SYNC=1 . scripts/hpc/env.sh
+
+uv run python scripts/finetune_lora.py \
+    --model HuggingFaceTB/SmolLM2-135M \
+    --split "train[:2000]" \
+    --batch-size 16 \
+    --epochs 3

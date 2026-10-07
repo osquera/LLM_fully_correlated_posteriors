@@ -16,7 +16,7 @@ from llmproj.projection import (
     project_vector,
     sample_projected_posterior,
 )
-from llmproj.alpha import estimate_kernel_dim, optimal_alpha
+from llmproj.alpha import estimate_kernel_dim, measure_alpha, optimal_alpha, per_row_losses
 
 N_ITER = 500  # calibrated: reaches ~3e-3 residual on this toy problem
 
@@ -128,6 +128,47 @@ def test_kernel_dim_and_alpha_are_sane():
 
     alpha = optimal_alpha(theta, space, kdim)
     assert alpha > 0 and torch.isfinite(torch.tensor(alpha))
+
+
+def test_optimal_alpha_maximises_the_evidence():
+    """alpha* must maximise the paper's Eq. 40, (rank/2) log a - a ||theta||^2 / 2.
+
+    The paper's Eq. 42 prints the reciprocal; this pins the corrected form.
+    """
+    _, space, theta, _, _ = _toy()
+    theta_norm_sq = float(sum((t ** 2).sum() for t in theta.values()))
+    rank = 17.0
+    alpha = optimal_alpha(theta, space, kernel_dim=space.P - rank)
+    assert alpha == pytest.approx(rank / theta_norm_sq)
+
+    def log_evidence(a):
+        return 0.5 * rank * torch.log(a) - 0.5 * a * theta_norm_sq
+
+    grid = alpha * torch.logspace(-2, 2, 401, dtype=torch.float64)
+    best = float(grid[torch.argmax(log_evidence(grid))])
+    assert best == pytest.approx(alpha, rel=0.03)
+
+
+def test_measure_alpha_lands_samples_within_tolerance():
+    """alpha from the line search must put samples where the loss tolerance holds."""
+    _, space, theta, f, batches = _toy()
+    factors = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    kdim = float(space.P - sum(fa.rank for fa in factors))
+    gen = torch.Generator().manual_seed(3)
+    dirs = torch.stack([
+        project_vector(torch.randn(space.P, generator=gen, dtype=space.dtype),
+                       f, theta, space, batches, factors, n_iterations=N_ITER)
+        for _ in range(3)
+    ])
+    base = per_row_losses(f, theta, batches)
+    tol = 0.01 * float(base.mean())
+    alpha, radii = measure_alpha(f, theta, space, batches, dirs, kdim, tol)
+    assert alpha == pytest.approx(kdim / min(radii) ** 2)
+
+    for d in dirs:
+        step = d / d.norm() * min(radii)
+        th = {n: theta[n] + v for n, v in space.unflatten(step).items()}
+        assert float((per_row_losses(f, th, batches) - base).abs().max()) <= tol
 
 
 def test_sample_projected_posterior_end_to_end():

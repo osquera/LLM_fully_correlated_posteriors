@@ -1,35 +1,35 @@
 {
   "results": {
     "projected_exact": {
-      "norm": 78.02485656738281,
-      "dloss": 0.1575922966003418,
-      "residual": 3.6711970105578774e-08
+      "norm": 26.129131317138672,
+      "dloss": 0.1365041732788086,
+      "residual": 4.2905585988757154e-08
     },
     "lla_full_cov": {
-      "norm": 78.24971008300781,
-      "dloss": 0.15486431121826172,
-      "residual": 0.0305105740575237
+      "norm": 26.22739028930664,
+      "dloss": 0.14175748825073242,
+      "residual": 0.038753564486036896
     },
     "diagonal_laplace": {
-      "norm": 78.21327209472656,
-      "dloss": 0.16046142578125,
-      "residual": 0.04029859362485235
+      "norm": 26.227230072021484,
+      "dloss": 0.14234018325805664,
+      "residual": 0.04050460912488809
     },
     "projected_iterative": {
-      "norm": 78.0244140625,
-      "dloss": 0.15759038925170898,
-      "residual": 4.056307729761696e-05
+      "norm": 26.129077911376953,
+      "dloss": 0.13650846481323242,
+      "residual": 4.675216094285496e-05
     }
   },
   "timings": {
-    "build_dense_J": 0.9153160999994725,
-    "projected_exact": 0.031011999999464024,
-    "lla_full_cov": 0.003175600002577994,
-    "diagonal_laplace": 0.0026590000052237883,
-    "projected_iterative_precompute": 2.2165468000021065,
-    "projected_iterative": 713.8906723999971
+    "build_dense_J": 0.08291122099763015,
+    "projected_exact": 0.0026496480058995076,
+    "lla_full_cov": 0.0008700510006747209,
+    "diagonal_laplace": 0.00012642899673664942,
+    "projected_iterative_precompute": 0.3352045560022816,
+    "projected_iterative": 113.07107882999844
   },
-  "alpha": 0.33488214015960693,
+  "alpha": 2.986125206687325,
   "n_rows": 16,
   "P": 2048,
   "args": {

@@ -87,7 +87,7 @@ def main():
     torch.manual_seed(0)
     model, vocab = load_model(args)
 
-    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"])
+    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"], trainable_only=False)
     theta, frozen = space.theta(model), space.frozen(model)
     f = make_causal_lm_loss(model, space, frozen, mode=args.loss_mode)
 

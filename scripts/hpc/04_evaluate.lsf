@@ -1,0 +1,20 @@
+#!/bin/sh
+# Stage 3: evaluate every method on train (Lemma 4.3), held-out test
+# (Alpaca train[2000:2256]) and OOD (WikiText-2). Runs with whichever sample
+# files exist, so a failed token-mode job still yields the sequence results.
+#BSUB -J pb_eval
+#BSUB -q gpuv100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_eval.out
+#BSUB -e logs/%J_eval.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/evaluate_posterior.py \
+    --samples samples/posterior_sequence.pt samples/posterior_token.pt \
+    --test-split "train[2000:2256]" \
+    --n-eval 256

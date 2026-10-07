@@ -1,0 +1,23 @@
+#!/bin/sh
+# Stage 2a: mode="sequence". J^L is 256 x 460,800 (~0.5 GB), so the exact SVD
+# path is used and the rank is exact. Saves projected / isotropic samples at the
+# measured and the closed-form alpha, plus diagonal and full linearised Laplace.
+#BSUB -J pb_seq
+#BSUB -q gpuv100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_seq.out
+#BSUB -e logs/%J_seq.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/sample_posterior.py \
+    --loss-mode sequence \
+    --projector exact \
+    --n-train 256 \
+    --proj-batch-size 16 \
+    --n-samples 16 \
+    --alpha-tol 0.01

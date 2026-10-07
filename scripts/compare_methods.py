@@ -75,7 +75,7 @@ def main():
     else:
         model, vocab = real_model(args)
 
-    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"])
+    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"], trainable_only=False)
     theta, frozen = space.theta(model), space.frozen(model)
     f = make_causal_lm_loss(model, space, frozen, mode=args.loss_mode)
 
@@ -112,7 +112,7 @@ def main():
         s = torch.linalg.svdvals(J.float())
         rank = int((s > 1e-6 * s.max()).sum())
         theta_norm_sq = float(sum((t.float() ** 2).sum() for t in theta.values()))
-        alpha = theta_norm_sq / max(space.P - (space.P - rank), 1)
+        alpha = max(rank, 1) / theta_norm_sq
         print(f"Lemma 3.4: rank(J^L) = {rank}, alpha* = {alpha:.6e}")
 
     methods = {

@@ -98,7 +98,10 @@ def main():
         for batch in tqdm(loader, desc=f"epoch {epoch}"):
             ids = batch["input_ids"].to(args.device)
             mask = batch["attention_mask"].to(args.device)
-            out = model(input_ids=ids, attention_mask=mask, labels=ids)
+            # pad = eos, so unmasked labels would train on runs of padding;
+            # -100 drops them, matching the masked loss the projection uses
+            labels = ids.masked_fill(mask == 0, -100)
+            out = model(input_ids=ids, attention_mask=mask, labels=labels)
             out.loss.backward()
             opt.step()
             opt.zero_grad(set_to_none=True)

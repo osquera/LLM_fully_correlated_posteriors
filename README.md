@@ -37,12 +37,16 @@ uv run pytest -q
 # 1. theta_map: LoRA fine-tune SmolLM2-135M. theta = adapters only (P = 460,800).
 uv run python scripts/finetune_lora.py --model HuggingFaceTB/SmolLM2-135M
 
-# 2. Draw from q(theta) = N(theta_map, alpha^-1 U_L U_L^T).
+# 2. Draw from q(theta) = N(theta_map, alpha^-1 U_L U_L^T), once per loss mode.
 #    --split MUST match stage 1: we project against theta_map's own training data.
-uv run python scripts/sample_posterior.py --n-samples 8 --n-iterations 500
+#    Saves projected and isotropic samples at a *measured* alpha and at Lemma
+#    3.4's alpha*, plus diagonal / full linearised Laplace (exact path only).
+uv run python scripts/sample_posterior.py --loss-mode sequence
+uv run python scripts/sample_posterior.py --loss-mode token --n-samples 8
 
-# 3. Test the paper's claims against an unprojected control.
-uv run python scripts/eval_underfitting.py
+# 3. Every method on train (Lemma 4.3), held-out test and OOD text: BMA NLL,
+#    accuracy, ECE, entropy, mutual information, OOD AUROC.
+uv run python scripts/evaluate_posterior.py
 
 # 4. Baselines side by side, with timings.
 uv run python scripts/compare_methods.py --adapter checkpoints/smollm2_lora
@@ -51,7 +55,9 @@ uv run python scripts/compare_methods.py --adapter checkpoints/smollm2_lora
 uv run python scripts/visualize_posterior.py --adapter checkpoints/smollm2_lora --loss-mode sequence
 ```
 
-On DTU HPC: `bsub < scripts/submit_dtu_hpc.sh` runs all of the above.
+On DTU HPC: `sh scripts/hpc/submit_pipeline.sh` submits stages 1-3 as four
+dependent LSF jobs (the two loss modes sample in parallel). `SKIP_FINETUNE=1`
+reuses an existing `checkpoints/smollm2_lora`.
 
 ## Library
 
@@ -76,14 +82,14 @@ exact. Measured on the tiny Llama (`P=2048`, `R=16`, 4 samples, 300 sweeps):
 
 | method | time | residual | notes |
 |---|---:|---:|---|
-| diagonal Laplace | 0.9 s | 4.0e-02 | mean field; not in the kernel |
-| linearised Laplace (full cov) | 0.9 s | 3.1e-02 | exact via SVD, no KFAC needed |
-| **projected, exact SVD** | **0.95 s** | **3.7e-08** | machine precision |
-| projected, alternating | 716 s | 4.1e-05 | matrix-free, scales to any `R` |
+| diagonal Laplace | 0.08 s | 4.1e-02 | mean field; not in the kernel |
+| linearised Laplace (full cov) | 0.08 s | 3.9e-02 | exact via SVD, no KFAC needed |
+| **projected, exact SVD** | **0.09 s** | **4.3e-08** | machine precision |
+| projected, alternating | 113 s | 4.7e-05 | matrix-free, scales to any `R` |
 
-Both projected routes produce the same `||delta||` (78.02 vs 78.02), which is an
+Both projected routes produce the same `||delta||` (26.13 vs 26.13), which is an
 independent check on the iterative implementation. But the exact route is
-**~750x faster here**, so:
+**~1000x faster here**, so:
 
 - `R * P` fits in memory (`build_loss_jacobian` will tell you, and refuses past
   `--max-gb`) -> use `llmproj.baselines.exact_projection_samples`.
@@ -138,76 +144,90 @@ von Neumann `acceleration` (default on) only helps past a few hundred sweeps
 
 ## The alpha scaling trap
 
-Lemma 3.4 gives `alpha* = ||theta_map||^2 / (P - Tr(I - P(GGN)))`, and that
-denominator is `rank(J^L)`. Since the covariance is `alpha^-1 U U^T` with
-`U U^T` a projector of rank `P - rank`, the typical sample size is
+Lemma 3.4's proof (Appendix A.3) maximises the approximate log evidence
+
+```
+log q(D | alpha) ~ -alpha ||theta_map||^2 / 2 + (rank / 2) log(alpha) + C     (Eq. 40)
+```
+
+with `rank = P - Tr(I - P(GGN)) = rank(J^L)`. Setting the derivative to zero
+(Eq. 41) gives
+
+```
+alpha* = rank(J^L) / ||theta_map||^2
+```
+
+**The paper prints the reciprocal** (Eq. 9 and Eq. 42:
+`alpha* = ||theta_map||^2 / rank`), which does not solve its own Eq. 41. The
+corrected form is MacKay's evidence update `alpha = gamma / ||w||^2`, with
+`gamma` the number of well-determined parameters. An earlier version of this
+repository used the printed form; `tests/test_projection.py` now checks that
+`optimal_alpha` maximises Eq. 40. (The variance corollary of Lemma 4.3 has a
+similar slip: `Var <= O(alpha^2)` should be `O(alpha^-2)`.)
+
+Since the covariance is `alpha^-1 U U^T` with `U U^T` a projector of rank
+`P - rank`, the typical sample size is
 
 ```
 E||delta||^2 = alpha^-1 * tr(U U^T) = alpha^-1 * (P - rank)
-             = rank * (P - rank) / ||theta_map||^2
+             = ||theta_map||^2 * (P - rank) / rank
 ```
 
 Two things follow:
 
-1. `||delta||` peaks at `rank = P/2` and vanishes as `rank -> P`.
-2. **In the regime `rank << P` -- which is the regime every LoRA setup is in --
-   `||delta||` GROWS with rank**, roughly as `sqrt(rank * P) / ||theta_map||`.
-
-Point 2 is what an earlier version of this README got backwards, and it is worth
-being precise about why. The error was *not* the `P` versus `P - rank`
-distinction: when `rank << P` those two agree to well under a percent, and
-either one gives `||delta|| ~ sqrt(rank * P) / ||theta_map||`. The error was a
-sign slip on the closed form itself. The old text claimed `mode="token"`
-*raises* `alpha*` by a factor of `T`; since `alpha* = ||theta_map||^2 / rank`,
-multiplying the rows by `T` *divides* `alpha*` by `T`. More rows, bigger
-posterior.
+1. `||delta||` **falls monotonically with the number of rows**, and vanishes as
+   `rank -> P`.
+2. In the regime `rank << P` -- the regime every LoRA setup is in --
+   `||delta|| ~ ||theta_map|| * sqrt(P / rank)`: a sample is `sqrt(P / rank)`
+   times larger than `theta_map` itself.
 
 Measured on the smoke test (`P = 2048`, exact `rank(J^L) = 16`,
-`||theta_map||^2 = 5.36`): `alpha* = 0.33`, giving `||delta|| = 78`. That is far
-outside the linear regime, where Lemma 4.3's `O(||delta||^2)` guarantee is
-worthless: projected and unprojected samples then degrade the loss about
-equally. (`scripts/smoke_test.py` prints that row beside a second one computed
-from the *estimated* kernel dimension, which gives `alpha* = 0.64` and
-`||delta|| = 56` from the same run. That gap is not rounding -- see below.)
+`||theta_map||^2 = 5.36`): `alpha* = 2.99`, giving `||delta|| = 26`. That is
+still far outside the linear regime, where Lemma 4.3's `O(||delta||^2)`
+guarantee is worthless: projected and unprojected samples then degrade the loss
+about equally. (`scripts/smoke_test.py` prints that row beside a second one
+computed from the *estimated* kernel dimension, which gives `alpha* = 1.56` and
+`||delta|| = 36` from the same run. That gap is not rounding -- see below.)
 
 That prediction is not just algebra: `figures/compare_methods.json`, recorded by
 `scripts/compare_methods.py` -- which takes the rank from the exact SVD
-(`n_rows: 16`) rather than from probes -- has `alpha: 0.3349` and a *measured*
-sample norm of `78.02`, from both the exact and the iterative route.
+(`n_rows: 16`) rather than from probes -- has `alpha: 2.986` and a *measured*
+sample norm of `26.13`, from both the exact and the iterative route.
+
+**"Optimal" does not mean "safe".** `alpha*` maximises the evidence of the
+*linearised* model, in which a step along the kernel leaves every training
+prediction unchanged however long it is. The evidence therefore cannot see
+where the linear regime ends, and nothing in it penalises a large `||delta||`.
 
 ### What actually sets the scale
 
-In the `rank << P` regime the identity rearranges to
+LoRA's `||theta_map||^2` is almost entirely `lora_A` -- `lora_B` is initialised
+to zero and stays near it -- and Kaiming init makes `||lora_A||^2` grow in
+proportion to `P`, so `c = ||theta_map||^2 / P` is a constant of the init. In
+the `rank << P` regime the identity becomes
 
 ```
-||delta|| ~ sqrt( rank / (||theta_map||^2 / P) )
+||delta|| ~ P * sqrt(c / rank)
 ```
 
-so only two quantities matter: the number of loss rows, and the *per-parameter*
-mean square of `theta_map`. `P` itself cancels. That is not an asymptotic
-argument, it is measurable. LoRA's `||theta_map||^2` is almost entirely
-`lora_A` -- `lora_B` is initialised to zero and stays near it -- and Kaiming
-init makes `||lora_A||^2` grow in proportion to `P`:
+| LoRA `r` | `P` | `||theta_map||^2` | per-param `c` | `alpha*` at `rank=16` | `||delta||` at `rank=16` |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 1,024 | 2.81 | 0.0027 | 5.69 | 13.3 |
+| 4 | 2,048 | 5.36 | 0.0026 | 2.99 | 26.1 |
+| 8 | 4,096 | 10.90 | 0.0027 | 1.47 | 52.7 |
+| 16 | 8,192 | 21.49 | 0.0026 | 0.74 | 104.8 |
+| 32 | 16,384 | 42.61 | 0.0026 | 0.38 | 208.8 |
 
-| LoRA `r` | `P` | `||theta_map||^2` | per-param | `||delta||` at `rank=16` |
-|---:|---:|---:|---:|---:|
-| 2 | 1,024 | 2.81 | 0.0027 | 75.8 |
-| 4 | 2,048 | 5.36 | 0.0026 | 77.9 |
-| 8 | 4,096 | 10.90 | 0.0027 | 77.4 |
-| 16 | 8,192 | 21.49 | 0.0026 | 78.0 |
-| 32 | 16,384 | 42.61 | 0.0026 | 78.4 |
-
-(Smoke-test config: 2 layers, `q_proj`/`v_proj`, at initialisation.) A sixteen-
-fold change in `P` moves `||delta||` by three percent. **Shrinking the adapter
-does not help** -- the per-parameter scale is set by the LoRA init, not by the
-parameter count. The driver is not `P >> N`, and not `P` at all: it is that
-`theta_map` is small *per parameter*, which for LoRA is structural.
+(Smoke-test config: 2 layers, `q_proj`/`v_proj`, at initialisation; the norms
+are measured, the last two columns follow from them.) `||delta||` grows
+**linearly in `P`** at fixed rank, so a smaller adapter helps proportionally --
+and more rows help as `1/sqrt(rank)`.
 
 ### The estimator degenerates before the formula does
 
-`alpha*` divides by `P - kernel_dim`, and `kernel_dim` comes from a Hutchinson
-probe whose standard deviation is `sqrt(2 * kernel_dim / k)` on `k` probes. The
-denominator is therefore a small difference between two large, noisy numbers.
+`alpha*` is proportional to `P - kernel_dim`, and `kernel_dim` comes from a
+Hutchinson probe whose standard deviation is `sqrt(2 * kernel_dim / k)` on `k`
+probes. The numerator is therefore a small difference between two large, noisy numbers.
 A single smoke-test run yields three estimates of the same rank:
 
 | source | kernel dim | implied rank |
@@ -221,7 +241,7 @@ all three readings are statistically consistent, and all three are useless. At
 the target scale it is worse, not better. With `P = 460,800`, `rank = N = 256`
 and 8 probes the std is `sqrt(2 * 460,544 / 8) = 339`, so the estimate can come
 out negative -- at which point `optimal_alpha` clamps with `max(rank, 1.0)` and
-returns `alpha = ||theta_map||^2`.
+returns `alpha = 1 / ||theta_map||^2`.
 
 Relative accuracy on `kernel_dim` is excellent and entirely beside the point.
 What `alpha*` needs is relative accuracy on `P - kernel_dim`, and that is a
@@ -247,25 +267,24 @@ floor, not because the projection got worse. So, in order of preference:
    on the real model, find where the worst per-datum loss change exceeds your
    tolerance, and pick `alpha` to land inside that. This is the only method here
    that reliably works, and it is cheap: one kernel direction and a line search.
-2. **Use fewer projection rows, not more.** Counter-intuitive, but it follows
-   from the identity above: in the `rank << P` regime, adding rows inflates the
-   posterior. It is not free -- fewer rows means a larger kernel, so fewer of
-   the sampled directions are genuinely loss-neutral and the Lemma 4.3
-   guarantee covers less. This buys scale at the cost of the guarantee rather
-   than improving both.
-3. **Take `rank` from the exact SVD when the dense `J^L` fits.** That removes
+2. **Use more projection rows: `mode="token"`.** It multiplies the rank by `T`,
+   which raises `alpha*` by `T` and shrinks `||delta||` by about `sqrt(T)` --
+   *and* tightens the guarantee from each sequence's mean loss to every
+   token's loss. On the smoke test, token mode has rank 368 instead of 16,
+   giving `alpha* = 68.7` and `||delta|| ~ 4.9` instead of 26. Statistically
+   there is no trade-off; the cost is compute. The dense `J^L` grows by `T`
+   and usually stops fitting, which forces the iterative projection, and that
+   can stall on correlated rows (adjacent tokens are exactly that) -- see the
+   convergence section.
+3. **Shrink the adapter.** `||delta||` is linear in `P` at fixed rank (table
+   above).
+4. **Take `rank` from the exact SVD when the dense `J^L` fits.** That removes
    the cancellation above, though not the scale problem.
 
-**Do NOT reach for `mode="token"` to fix this.** It multiplies rank by `T`,
-which makes `||delta||` larger, and it forces you onto the iterative projection
-(dense `J^L` no longer fits) which can stall -- see the convergence section.
-An earlier version of this README recommended exactly that, wrongly.
-
-This is not a flaw in the paper: it targets `P >> N*O` with `O` large, so
-`rank = N*O` is substantial and `||theta_map||` is a full network's worth of
-trained weights, large per parameter. A causal LM with LoRA collapses `O` to 1
-*and* pins the per-parameter scale at its initialisation value, which is where
-the closed form degenerates. Worth writing up.
+This is not a flaw in the method's design, beyond the misprint: it targets
+`P >> N*O` with `O` large, so `rank = N*O` is substantial. A causal LM in
+`mode="sequence"` collapses `O` to 1, the smallest rank -- and so the largest
+`||delta||` -- available. Worth writing up.
 
 ## Open choice: what is "one datum" for a sequence model?
 
@@ -275,19 +294,22 @@ the closed form degenerates. Worth writing up.
   literally; `J^L` is `(N, P)`. **Start here.**
 - `"token"` — one row per token; `J^L` is `(N·T, P)`. Closer to the full-Jacobian
   kernel of §4 and a stronger per-token guarantee, but `T×` the cost, a dense
-  `J^L` far too large to factor directly, and — per the alpha section above — a
-  *larger* `||delta||` under Lemma 3.4, not a smaller one.
+  `J^L` far too large to factor directly. Under Lemma 3.4 it also gives a
+  *smaller* `||delta||` (alpha section above).
 
 The paper does not address sequence models, so this trade-off is unexplored and
 is a plausible contribution in itself.
 
 ## Evaluation plan
 
-- **Lemma 4.3 / no underfitting** — train-set perplexity of posterior samples vs
-  MAP, against an unprojected `N(0, α^-1 I)` control at identical scale.
-  `scripts/eval_underfitting.py` does this; it is the headline result.
-- **Lemma 3.2 / OOD variance** — predictive entropy and sample disagreement,
-  in-distribution vs OOD text.
+- **Lemma 4.3 / no underfitting** — worst change in any training sequence's
+  mean NLL under posterior samples, against an unprojected `N(0, α^-1 I)`
+  control at identical scale. `scripts/evaluate_posterior.py` reports it as
+  `trainΔ`; it is the headline result.
+- **Held-out predictive quality** — BMA NLL, accuracy and ECE on Alpaca
+  `train[2000:2256]`, which fine-tuning never sees.
+- **Lemma 3.2 / OOD variance** — mutual information in-distribution vs
+  WikiText-2, and the AUROC it gives for OOD detection.
 - **Downstream** — calibration (ECE) on multiple-choice tasks, selective
   prediction, hallucination detection.
 - **Baselines** — MAP, last-layer Laplace, diagonal Laplace, MC-dropout, LoRA

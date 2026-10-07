@@ -116,6 +116,24 @@ def linearized_laplace_samples(
 
 
 @torch.no_grad()
+def exact_kernel_projections(
+    J: torch.Tensor, n_samples: int, seed: int = 0, rtol: float = 1e-6
+) -> tuple[torch.Tensor, int]:
+    """(I - P(J^T J)) eps for ``n_samples`` standard normal eps, and rank(J).
+
+    These are samples of the projected posterior at alpha = 1; divide by
+    sqrt(alpha) for any other alpha.
+    """
+    _, W = _svd(J, rtol)
+    gen = torch.Generator(device="cpu").manual_seed(seed)
+    out = []
+    for _ in range(n_samples):
+        eps = torch.randn(J.shape[1], generator=gen).to(W.device)
+        out.append((eps - W.T @ (W @ eps)).cpu())
+    return torch.stack(out), int(W.shape[0])
+
+
+@torch.no_grad()
 def exact_projection_samples(
     J: torch.Tensor, alpha: float, n_samples: int, seed: int = 0, rtol: float = 1e-6
 ) -> torch.Tensor:
@@ -125,10 +143,5 @@ def exact_projection_samples(
     Use it to validate the iterative sampler, and prefer it whenever dense J
     fits: it is orders of magnitude cheaper.
     """
-    _, W = _svd(J, rtol)
-    gen = torch.Generator(device="cpu").manual_seed(seed)
-    out = []
-    for _ in range(n_samples):
-        eps = torch.randn(J.shape[1], generator=gen).to(W.device)
-        out.append(((eps - W.T @ (W @ eps)) / alpha**0.5).cpu())
-    return torch.stack(out)
+    pv, _ = exact_kernel_projections(J, n_samples, seed=seed, rtol=rtol)
+    return pv / alpha**0.5

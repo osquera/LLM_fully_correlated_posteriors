@@ -10,7 +10,7 @@
 # The kernel residual is printed per sample: section 6.1 of the walkthrough
 # shows the iteration can stall on highly correlated rows, as tokens are.
 #BSUB -J pb_token
-#BSUB -q gpuv100
+#BSUB -q gpua100
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -n 4
 #BSUB -R "span[hosts=1]"

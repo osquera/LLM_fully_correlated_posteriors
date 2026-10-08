@@ -3,7 +3,7 @@
 # path is used and the rank is exact. Saves projected / isotropic samples at the
 # measured and the closed-form alpha, plus diagonal and full linearised Laplace.
 #BSUB -J pb_seq
-#BSUB -q gpuv100
+#BSUB -q gpua100
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -n 4
 #BSUB -R "span[hosts=1]"

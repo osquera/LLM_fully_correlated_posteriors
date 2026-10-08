@@ -29,6 +29,13 @@ export UV_PYTHON_PREFERENCE=only-managed
 # GPU wheels come from the cu128 index, which needs a >=12.8 driver; if
 # `nvidia-smi` above shows an older one, point tool.uv.index at cu126.
 if [ "${UV_SYNC:-0}" = "1" ]; then
+    # A partially extracted interpreter (stdlib missing, sys.prefix stuck at
+    # the build placeholder '/install') fails the same way: reinstall it.
+    py=$(uv python find --system "$UV_PYTHON" 2>/dev/null || true)
+    if [ -z "$py" ] || ! "$py" -c "import encodings, os" 2>/dev/null; then
+        uv python install --reinstall "$UV_PYTHON"
+        rm -rf .venv
+    fi
     .venv/bin/python -c "import encodings" 2>/dev/null || rm -rf .venv
     uv sync --extra gpu
 fi

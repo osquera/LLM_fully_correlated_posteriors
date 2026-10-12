@@ -16,7 +16,14 @@ from llmproj.projection import (
     project_vector,
     sample_projected_posterior,
 )
-from llmproj.alpha import estimate_kernel_dim, measure_alpha, optimal_alpha, per_row_losses
+from llmproj.alpha import (
+    estimate_kernel_dim,
+    loss_radii,
+    loss_radius,
+    measure_alpha,
+    optimal_alpha,
+    per_row_losses,
+)
 
 N_ITER = 500  # calibrated: reaches ~3e-3 residual on this toy problem
 
@@ -169,6 +176,19 @@ def test_measure_alpha_lands_samples_within_tolerance():
         step = d / d.norm() * min(radii)
         th = {n: theta[n] + v for n, v in space.unflatten(step).items()}
         assert float((per_row_losses(f, th, batches) - base).abs().max()) <= tol
+
+
+def test_loss_radii_matches_one_search_per_tolerance():
+    """The shared grid scan must give what separate line searches give."""
+    _, space, theta, f, batches = _toy()
+    gen = torch.Generator().manual_seed(5)
+    d = torch.randn(space.P, generator=gen, dtype=space.dtype)
+    base = per_row_losses(f, theta, batches)
+    tols = [x * float(base.mean()) for x in (0.005, 0.02, 0.1)]
+    shared = loss_radii(f, theta, space, batches, d, tols, base=base)
+    single = [loss_radius(f, theta, space, batches, d, t, base=base) for t in tols]
+    assert shared == pytest.approx(single)
+    assert shared == sorted(shared)
 
 
 def test_sample_projected_posterior_end_to_end():

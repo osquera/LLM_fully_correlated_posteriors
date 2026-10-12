@@ -29,6 +29,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
@@ -67,10 +68,56 @@ def encode(tokenizer, texts, max_length):
 
 
 def auroc(neg: torch.Tensor, pos: torch.Tensor) -> float:
-    """P(score_pos > score_neg), ties counted half (Mann-Whitney U)."""
-    gt = (pos[:, None] > neg[None, :]).float().mean()
-    eq = (pos[:, None] == neg[None, :]).float().mean()
-    return float(gt + 0.5 * eq)
+    """P(score_pos > score_neg), ties counted half (Mann-Whitney U).
+
+    Rank-based, so it scales to the ~65k tokens of a set."""
+    if len(neg) == 0 or len(pos) == 0:
+        return float("nan")
+    x = np.concatenate([neg.double().numpy(), pos.double().numpy()])
+    order = np.argsort(x, kind="mergesort")
+    ranks = np.empty(len(x))
+    ranks[order] = np.arange(1, len(x) + 1)
+    _, inv, counts = np.unique(x, return_inverse=True, return_counts=True)
+    ranks = (np.bincount(inv, weights=ranks) / counts)[inv]  # average rank of ties
+    n0, n1 = len(neg), len(pos)
+    return float((ranks[n0:].sum() - n1 * (n1 + 1) / 2) / (n0 * n1))
+
+
+def selective(correct: torch.Tensor, score: torch.Tensor) -> dict:
+    """Is the model wrong where it is uncertain? ``score`` is an uncertainty
+    (higher = less sure), one per token.
+
+      err_auroc  P(a wrong token scores higher than a right one); 0.5 = blind
+      aurc       area under the risk-coverage curve: answer only the most
+                 certain fraction c of tokens, average the error rate over c.
+                 Lower is better; the oracle that rejects exactly the errors
+                 gets aurc_oracle, which depends only on the error rate
+      acc@c      accuracy on the most certain c of the tokens; should rise as
+                 c falls if the uncertainty is informative
+    """
+    c = correct.bool()
+    order = torch.argsort(score.double(), stable=True)
+    err = (~c[order]).double()
+    risk = err.cumsum(0) / torch.arange(1, len(err) + 1, dtype=torch.float64)
+    out = {"err_auroc": auroc(score[c], score[~c]), "aurc": float(risk.mean())}
+    for cov in (0.5, 0.8):
+        k = max(1, int(cov * len(err)))
+        out[f"acc@{cov:g}"] = float(1 - err[:k].mean())
+    return out
+
+
+def selective_report(tok: dict, with_mi: bool) -> dict:
+    """`selective` for each uncertainty score of one token set."""
+    scores = {"entropy": tok["entropy"], "1-conf": 1 - tok["conf"]}
+    if with_mi:
+        scores["mi"] = tok["mi"]
+    rep = {k: selective(tok["correct"], v) for k, v in scores.items()}
+    n, e = len(tok["correct"]), float(1 - tok["correct"].float().mean())
+    # risk-coverage of the oracle: all right tokens first
+    k = int(round(n * (1 - e)))
+    i = torch.arange(1, n + 1, dtype=torch.float64)
+    rep["aurc_oracle"] = float(((i - k).clamp(min=0) / i).mean())
+    return rep
 
 
 @torch.no_grad()
@@ -85,6 +132,7 @@ def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
     seq_mi = torch.zeros(n_seq)
     seq_h = torch.zeros(n_seq)
     seq_nll = torch.zeros(deltas.shape[0], n_seq)  # per sample, per sequence
+    tok = {"correct": [], "conf": [], "entropy": [], "mi": []}  # per valid token
 
     params = []
     for d in deltas:
@@ -130,6 +178,10 @@ def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
         seq_h[i : i + ids.size(0)] = ((h_bar * vf).sum(1) / vf.sum(1).clamp(min=1)).cpu()
 
         c, a = conf[valid].cpu(), correct[valid].cpu()
+        tok["correct"].append(a.bool())
+        tok["conf"].append(c)
+        tok["entropy"].append(h_bar[valid].cpu())
+        tok["mi"].append(mi[valid].cpu())
         b = (c * N_BINS).long().clamp(max=N_BINS - 1)
         bin_n += torch.bincount(b, minlength=N_BINS).float()
         bin_conf += torch.bincount(b, weights=c, minlength=N_BINS)
@@ -146,7 +198,78 @@ def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
         "entropy": tot["entropy"] / ntok,
         "mi": tot["mi"] / ntok,
         "n_tokens": ntok,
-    }, {"mi": seq_mi, "entropy": seq_h}, seq_nll
+    }, {"mi": seq_mi, "entropy": seq_h,
+        "tok": {k: torch.cat(v) for k, v in tok.items()}}, seq_nll
+
+
+def build_sets(tokenizer, sargs, args):
+    """train / test / ood encodings. ``sargs`` are the sampler's args, ``args``
+    need test_split, n_eval and the ood_* fields."""
+    # train: the very sequences behind J^L, taken from the sampler's own args
+    ds = load_dataset(sargs["dataset"], split=sargs["split"])
+    field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
+    max_len = sargs["max_length"]
+    train_enc = encode(tokenizer, list(ds[field])[: sargs["n_train"]], max_len)
+    test_ds = load_dataset(sargs["dataset"], split=args.test_split)
+    test_enc = encode(tokenizer, list(test_ds[field])[: args.n_eval], max_len)
+    ood_ds = load_dataset(args.ood_dataset, args.ood_config, split=args.ood_split)
+    ood_field = "text" if "text" in ood_ds.column_names else ood_ds.column_names[0]
+    # WikiText has many short lines; keep the long ones so the sets are comparable
+    ood_texts = [t for t in ood_ds[ood_field] if len(t.split()) >= 64]
+    ood_enc = encode(tokenizer, ood_texts[: args.n_eval], max_len)
+    sets = {"train": train_enc, "test": test_enc, "ood": ood_enc}
+    print({k: tuple(v["input_ids"].shape) for k, v in sets.items()})
+    return sets
+
+
+def evaluate_method(model, frozen, theta, space, deltas, sets, device, batch_size,
+                    map_seq_nll=None):
+    """All sets for one method. Pass ``map_seq_nll=None`` for the MAP itself;
+    returns the results and the per-sample, per-train-sequence NLL."""
+    res, scores = {}, {}
+    for sname, enc in sets.items():
+        r, seq_scores, seq_nll = evaluate_set(model, frozen, theta, space, deltas, enc,
+                                              device, batch_size)
+        res[sname] = r
+        scores[sname] = seq_scores
+        if sname == "train":
+            train_nll = seq_nll
+            if map_seq_nll is None:
+                res["train"]["worst_seq_dnll"] = 0.0
+                res["train"]["mean_abs_seq_dnll"] = 0.0
+            else:
+                dn = (seq_nll - map_seq_nll[None]).abs()
+                res["train"]["worst_seq_dnll"] = float(dn.max())
+                res["train"]["mean_abs_seq_dnll"] = float(dn.mean())
+    # MAP has one sample, so its mi is identically zero: score it by entropy
+    key = "entropy" if map_seq_nll is None else "mi"
+    res["ood"]["auroc"] = auroc(scores["test"][key], scores["ood"][key])
+    # Wrong where uncertain, right where certain: per set, and pooled over
+    # test + ood, where a good uncertainty must also rank the (mostly wrong)
+    # ood tokens below the in-distribution ones.
+    with_mi = map_seq_nll is not None
+    for sname in ("test", "ood"):
+        res[sname]["selective"] = selective_report(scores[sname]["tok"], with_mi)
+    pooled = {k: torch.cat([scores["test"]["tok"][k], scores["ood"]["tok"][k]])
+              for k in scores["test"]["tok"]}
+    res["pooled"] = {"selective": selective_report(pooled, with_mi)}
+    res["norm"] = float(deltas.norm(dim=1).mean())
+    return res, train_nll
+
+
+def print_selective(results):
+    """Is each method wrong where it is uncertain? (see `selective`)"""
+    print("\nselective prediction: err_auroc (higher better) / aurc (lower better), "
+          "per uncertainty score")
+    print(f"{'method':40s} {'set':7s} {'entropy':>15s} {'1-conf':>15s} {'mi':>15s} "
+          f"{'acc@0.5':>8s} {'oracle':>7s}")
+    for name, r in results.items():
+        for sname in ("test", "ood", "pooled"):
+            sel = r[sname]["selective"]
+            cells = [f"{sel[k]['err_auroc']:.3f}/{sel[k]['aurc']:.3f}" if k in sel else "-"
+                     for k in ("entropy", "1-conf", "mi")]
+            print(f"{name:40s} {sname:7s} {cells[0]:>15s} {cells[1]:>15s} {cells[2]:>15s} "
+                  f"{sel['entropy']['acc@0.5']:8.4f} {sel['aurc_oracle']:7.3f}")
 
 
 def main():
@@ -172,20 +295,7 @@ def main():
     theta = space.theta(model)
     frozen = space.frozen(model)
 
-    # train: the very sequences behind J^L, taken from the sampler's own args
-    ds = load_dataset(sargs["dataset"], split=sargs["split"])
-    field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
-    max_len = sargs["max_length"]
-    train_enc = encode(tokenizer, list(ds[field])[: sargs["n_train"]], max_len)
-    test_ds = load_dataset(sargs["dataset"], split=args.test_split)
-    test_enc = encode(tokenizer, list(test_ds[field])[: args.n_eval], max_len)
-    ood_ds = load_dataset(args.ood_dataset, args.ood_config, split=args.ood_split)
-    ood_field = "text" if "text" in ood_ds.column_names else ood_ds.column_names[0]
-    # WikiText has many short lines; keep the long ones so the sets are comparable
-    ood_texts = [t for t in ood_ds[ood_field] if len(t.split()) >= 64]
-    ood_enc = encode(tokenizer, ood_texts[: args.n_eval], max_len)
-    sets = {"train": train_enc, "test": test_enc, "ood": ood_enc}
-    print({k: tuple(v["input_ids"].shape) for k, v in sets.items()})
+    sets = build_sets(tokenizer, sargs, args)
 
     methods = {"map": torch.zeros(1, space.P)}
     meta = {}
@@ -198,25 +308,10 @@ def main():
 
     results, map_seq_nll = {}, None
     for name, deltas in methods.items():
-        res, scores = {}, {}
-        for sname, enc in sets.items():
-            r, seq_scores, seq_nll = evaluate_set(model, frozen, theta, space, deltas, enc,
-                                              args.device, args.batch_size)
-            res[sname] = r
-            scores[sname] = seq_scores
-            if sname == "train":
-                if name == "map":
-                    map_seq_nll = seq_nll[0]
-                    res["train"]["worst_seq_dnll"] = 0.0
-                    res["train"]["mean_abs_seq_dnll"] = 0.0
-                else:
-                    dn = (seq_nll - map_seq_nll[None]).abs()
-                    res["train"]["worst_seq_dnll"] = float(dn.max())
-                    res["train"]["mean_abs_seq_dnll"] = float(dn.mean())
-        # MAP has one sample, so its mi is identically zero: score it by entropy
-        key = "entropy" if name == "map" else "mi"
-        res["ood"]["auroc"] = auroc(scores["test"][key], scores["ood"][key])
-        res["norm"] = float(deltas.norm(dim=1).mean())
+        res, seq_nll = evaluate_method(model, frozen, theta, space, deltas, sets,
+                                       args.device, args.batch_size, map_seq_nll)
+        if name == "map":
+            map_seq_nll = seq_nll[0]
         results[name] = res
         print(f"{name:40s} test nll_bma={res['test']['nll_bma']:.4f} "
               f"ece={res['test']['ece']:.4f}  train worst dnll="
@@ -232,6 +327,7 @@ def main():
               f"{r['test']['mi']:9.3g} {r['ood']['mi']:9.3g} {r['ood']['auroc']:7.3f}")
     print("trainΔ = worst |change in a train sequence's mean NLL| over all samples "
           "(Lemma 4.3); AUROC uses MI (entropy for map)")
+    print_selective(results)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

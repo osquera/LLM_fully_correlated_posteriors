@@ -119,6 +119,29 @@ def loss_radius(
     space between it and the last step that passed. Returns ``grid[-1]`` if
     nothing on the grid exceeds ``tol``, and ``0.0`` if even ``grid[0]`` does.
     """
+    return loss_radii(f, theta, space, batches, direction, [tol], base=base,
+                      grid=grid, n_bisect=n_bisect)[0]
+
+
+@torch.no_grad()
+def loss_radii(
+    f: Callable,
+    theta: dict[str, torch.Tensor],
+    space: ParamSpace,
+    batches: Sequence[dict[str, torch.Tensor]],
+    direction: torch.Tensor,
+    tols: Sequence[float],
+    base: torch.Tensor | None = None,
+    grid: torch.Tensor | None = None,
+    n_bisect: int = 8,
+) -> list[float]:
+    """`loss_radius` for several tolerances, sharing one scan of ``grid``.
+
+    The grid is walked once, stopping at the first step that exceeds the
+    largest tolerance; each tolerance then bisects its own bracket. That costs
+    ``len(grid) + len(tols) * n_bisect`` loss evaluations at most, rather than
+    ``len(tols)`` times the grid.
+    """
     if base is None:
         base = per_row_losses(f, theta, batches)
     if grid is None:
@@ -130,23 +153,34 @@ def loss_radius(
         th = {n: theta[n] + d for n, d in space.unflatten(u * s).items()}
         return float((per_row_losses(f, th, batches) - base).abs().max())
 
-    lo = 0.0
+    scanned = []  # (step, worst change), in grid order
     for s in grid.tolist():
-        if worst(s) > tol:
-            hi = s
+        scanned.append((s, worst(s)))
+        if scanned[-1][1] > max(tols):
             break
-        lo = s
-    else:
-        return float(grid[-1])
-    if lo == 0.0:
-        return 0.0
-    for _ in range(n_bisect):
-        mid = (lo * hi) ** 0.5
-        if worst(mid) > tol:
-            hi = mid
-        else:
-            lo = mid
-    return lo
+
+    radii = []
+    for tol in tols:
+        lo, hi = 0.0, None
+        for s, w in scanned:
+            if w > tol:
+                hi = s
+                break
+            lo = s
+        if hi is None:
+            radii.append(float(grid[-1]))
+            continue
+        if lo == 0.0:
+            radii.append(0.0)
+            continue
+        for _ in range(n_bisect):
+            mid = (lo * hi) ** 0.5
+            if worst(mid) > tol:
+                hi = mid
+            else:
+                lo = mid
+        radii.append(lo)
+    return radii
 
 
 def measure_alpha(

@@ -45,8 +45,14 @@ uv run python scripts/sample_posterior.py --loss-mode sequence
 uv run python scripts/sample_posterior.py --loss-mode token --n-samples 8
 
 # 3. Every method on train (Lemma 4.3), held-out test and OOD text: BMA NLL,
-#    accuracy, ECE, entropy, mutual information, OOD AUROC.
+#    accuracy, ECE, entropy, mutual information, OOD AUROC, and selective
+#    prediction (is the model wrong where it is uncertain?).
 uv run python scripts/evaluate_posterior.py
+
+# 3b. The same at several loss tolerances. Rescales the saved samples, so no
+#     re-projection (token mode's took ~22 GPU hours).
+uv run python scripts/sweep_tolerance.py --tols 0.005 0.01 0.02 0.05 0.1 0.2
+uv run python scripts/plot_tolerance_sweep.py
 
 # 4. Baselines side by side, with timings.
 uv run python scripts/compare_methods.py --adapter checkpoints/smollm2_lora
@@ -57,7 +63,24 @@ uv run python scripts/visualize_posterior.py --adapter checkpoints/smollm2_lora 
 
 On DTU HPC: `sh scripts/hpc/submit_pipeline.sh` submits stages 1-3 as four
 dependent LSF jobs (the two loss modes sample in parallel). `SKIP_FINETUNE=1`
-reuses an existing `checkpoints/smollm2_lora`.
+reuses an existing `checkpoints/smollm2_lora`. The tolerance sweep is a
+separate job once samples exist: `bsub < scripts/hpc/05_sweep_tolerance.lsf`.
+
+### Trying it by hand
+
+`scripts/generate.py` loads one method's samples, generates from the Bayesian
+model average (or scores a text you give it) and colours every token by its
+mutual information, i.e. by how much the samples disagree there:
+
+```bash
+uv run python scripts/generate.py --instruction "Name three primary colours."
+uv run python scripts/generate.py --raw --score "Some off-distribution text."
+uv run python scripts/generate.py --method isotropic_measured --scale 3 --instruction "..."
+uv run python scripts/generate.py --method map --instruction "..."   # no uncertainty
+```
+
+It needs `checkpoints/smollm2_lora/` (a few MB) and a samples file
+(`samples/posterior_sequence.pt` ~180 MB, `posterior_token.pt` ~60 MB); CPU is fine.
 
 ## Library
 
@@ -310,8 +333,14 @@ is a plausible contribution in itself.
   `train[2000:2256]`, which fine-tuning never sees.
 - **Lemma 3.2 / OOD variance** — mutual information in-distribution vs
   WikiText-2, and the AUROC it gives for OOD detection.
-- **Downstream** — calibration (ECE) on multiple-choice tasks, selective
-  prediction, hallucination detection.
+- **Uncertain where wrong, certain where right** — per token, pooled over
+  test and OOD: the AUROC of an uncertainty score (entropy, 1 - confidence,
+  MI) for telling wrong predictions from right ones, the area under the
+  risk-coverage curve (AURC: answer only the most certain fraction, average
+  the error), and accuracy on the most certain 50%. The MAP's own entropy is
+  the bar to beat; MI is the part only a posterior has.
+- **Downstream** — calibration (ECE) on multiple-choice tasks, hallucination
+  detection.
 - **Baselines** — MAP, last-layer Laplace, diagonal Laplace, MC-dropout, LoRA
   deep ensemble, and **Laplace-LoRA** (Yang et al., 2024), the closest prior work.
 

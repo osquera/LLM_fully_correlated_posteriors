@@ -1,0 +1,25 @@
+#!/bin/sh
+# Stage 4: sweep the loss tolerance behind the measured alpha. Reuses the saved
+# samples (rescaling only, no re-projection), so token mode does not pay its
+# ~22 h projection again. Per tolerance: ~10 min of evaluation; the radii are
+# one grid scan per direction (~1 h for 16 + 8 directions). The JSON is
+# rewritten after every tolerance, so a job cut short keeps what it finished.
+# Submit on its own after stages 2a/2b:   bsub < scripts/hpc/05_sweep_tolerance.lsf
+#BSUB -J pb_sweep
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 8:00
+#BSUB -o logs/%J_sweep.out
+#BSUB -e logs/%J_sweep.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/sweep_tolerance.py \
+    --samples samples/posterior_sequence.pt samples/posterior_token.pt \
+    --tols 0.005 0.01 0.02 0.05 0.1 0.2 \
+    --test-split "train[2000:2256]" \
+    --n-eval 256
+uv run python scripts/plot_tolerance_sweep.py

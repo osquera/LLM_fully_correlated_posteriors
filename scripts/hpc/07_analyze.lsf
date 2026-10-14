@@ -1,0 +1,23 @@
+#!/bin/sh
+# Follow-up analyses on the existing samples (scripts/analyze_posterior.py):
+# MI beyond the softmax, the never-projected train sequences, and near-OOD
+# sets in the Alpaca template. ~30-60 min; all measured-alpha methods.
+# Submit after stages 2a/2b:   bsub < scripts/hpc/07_analyze.lsf   (LOSS_ON=response ... too)
+#BSUB -J pb_analyze
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_analyze.out
+#BSUB -e logs/%J_analyze.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/analyze_posterior.py \
+    --samples "$SAMPLES_SEQ" "$SAMPLES_TOK" \
+    --adapter "$ADAPTER" \
+    --test-split "train[2000:2256]" \
+    --n-eval 256 \
+    --out "figures/analysis$SUF.json"

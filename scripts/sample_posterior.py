@@ -50,6 +50,7 @@ from llmproj.baselines import (
     jacobian_memory_gb,
     linearized_laplace_samples,
 )
+from llmproj.data import encode_texts
 from llmproj.losses import make_causal_lm_loss
 from llmproj.paramspace import ParamSpace
 from llmproj.projection import kernel_residual, sample_projected_posterior
@@ -67,6 +68,9 @@ def parse_args():
     ap.add_argument("--n-train", type=int, default=256, help="sequences behind J^L")
     ap.add_argument("--proj-batch-size", type=int, default=16, help="S; per-batch inverse is S x S")
     ap.add_argument("--loss-mode", choices=["sequence", "token"], default="sequence")
+    ap.add_argument("--loss-on", choices=["all", "response"], default=None,
+                    help="tokens that carry loss (default: what the adapter was "
+                         "fine-tuned with, from its run.json)")
     ap.add_argument("--projector", choices=["auto", "exact", "iterative"], default="auto")
     ap.add_argument("--max-gb", type=float, default=8.0, help="dense J^L budget for --projector auto")
     ap.add_argument("--n-samples", type=int, default=16)
@@ -88,6 +92,13 @@ def parse_args():
 
 def main():
     args = parse_args()
+    run = Path(args.adapter) / "run.json"
+    tuned_on = json.loads(run.read_text()).get("loss_on", "all") if run.exists() else None
+    if args.loss_on is None:
+        args.loss_on = tuned_on or "all"
+    elif tuned_on and args.loss_on != tuned_on:
+        print(f"WARNING: --loss-on {args.loss_on}, but the adapter was fine-tuned with "
+              f"{tuned_on}: the projection then constrains tokens theta_map did not fit")
     out = Path(args.out or f"samples/posterior_{args.loss_mode}.pt")
     timings = {}
 
@@ -113,16 +124,15 @@ def main():
     ds = load_dataset(args.dataset, split=args.split)
     field = args.text_field if args.text_field in ds.column_names else ds.column_names[0]
     ds = ds.select(range(min(args.n_train, len(ds))))
-    enc = tokenizer(
-        list(ds[field]), truncation=True, max_length=args.max_length,
-        padding="max_length", return_tensors="pt",
-    )
+    enc = encode_texts(tokenizer, ds[field], args.max_length, loss_on=args.loss_on)
     S = args.proj_batch_size
     batches = [
-        {"input_ids": enc["input_ids"][i : i + S].to(args.device),
-         "attention_mask": enc["attention_mask"][i : i + S].to(args.device)}
+        {k: v[i : i + S].to(args.device) for k, v in enc.items()}
         for i in range(0, enc["input_ids"].size(0), S)
     ]
+    # targets per sequence; in token mode, every other row of J^L is exactly zero
+    n_targets = int(enc["loss_mask"][:, 1:].sum())
+    print(f"loss on {args.loss_on}: {n_targets} target tokens")
     n_rows = int(sum(f(theta, b).numel() for b in batches))
     print(f"{len(batches)} batches, {n_rows} J^L rows (mode={args.loss_mode})")
 
@@ -197,7 +207,8 @@ def main():
         print(f"  {m:28s} {n:10.4g}")
 
     info.update({
-        "P": space.P, "n_rows": n_rows, "loss_mode": args.loss_mode,
+        "P": space.P, "n_rows": n_rows, "n_target_tokens": n_targets,
+        "loss_mode": args.loss_mode, "loss_on": args.loss_on,
         "projector": projector, "kernel_dim": kdim, "alphas": alphas,
         "alpha_tol_nats": tol_abs, "radii": radii, "norms": norms,
         "theta_norm_sq": float(sum((t.float() ** 2).sum() for t in theta.values())),

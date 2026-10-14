@@ -61,7 +61,11 @@ def make_causal_lm_loss(
             reduction="none",
         ).view(S, Tm1)
 
-        if "attention_mask" in batch:
+        # loss_mask (llmproj.data) picks the target tokens, e.g. response only;
+        # without it, every non-padding token is a target
+        if "loss_mask" in batch:
+            valid = batch["loss_mask"][:, 1:].to(nll.dtype)
+        elif "attention_mask" in batch:
             valid = batch["attention_mask"][:, 1:].to(nll.dtype)
         else:
             valid = torch.ones_like(nll)

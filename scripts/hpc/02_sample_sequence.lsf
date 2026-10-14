@@ -20,4 +20,6 @@ uv run python scripts/sample_posterior.py \
     --n-train 256 \
     --proj-batch-size 16 \
     --n-samples 16 \
-    --alpha-tol 0.01
+    --alpha-tol 0.01 \
+    --adapter "$ADAPTER" \
+    --out "$SAMPLES_SEQ"

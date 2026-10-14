@@ -16,4 +16,6 @@ uv run python scripts/finetune_lora.py \
     --model HuggingFaceTB/SmolLM2-135M \
     --split "train[:2000]" \
     --batch-size 16 \
-    --epochs 3
+    --epochs 3 \
+    --loss-on "$LOSS_ON" \
+    --out "$ADAPTER"

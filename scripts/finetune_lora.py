@@ -20,9 +20,11 @@ from pathlib import Path
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+from llmproj.data import encode_texts
 
 
 def parse_args():
@@ -32,6 +34,9 @@ def parse_args():
     ap.add_argument("--split", default="train[:2000]")
     ap.add_argument("--text-field", default="text")
     ap.add_argument("--max-length", type=int, default=256)
+    ap.add_argument("--loss-on", choices=["all", "response"], default="all",
+                    help="train on every token, or only on the response after "
+                         "'### Response:' (the prompt is still seen, not fit)")
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--lr", type=float, default=1e-4)
@@ -50,17 +55,10 @@ def parse_args():
 def build_loader(args, tokenizer):
     ds = load_dataset(args.dataset, split=args.split)
     field = args.text_field if args.text_field in ds.column_names else ds.column_names[0]
-
-    def tok(batch):
-        return tokenizer(
-            batch[field],
-            truncation=True,
-            max_length=args.max_length,
-            padding="max_length",
-        )
-
-    ds = ds.map(tok, batched=True, remove_columns=ds.column_names)
-    ds.set_format("torch", columns=["input_ids", "attention_mask"])
+    enc = encode_texts(tokenizer, ds[field], args.max_length, loss_on=args.loss_on)
+    print(f"loss on {args.loss_on}: {int(enc['loss_mask'].sum())} target tokens of "
+          f"{int(enc['attention_mask'].sum())}")
+    ds = TensorDataset(enc["input_ids"], enc["attention_mask"], enc["loss_mask"])
     return DataLoader(ds, batch_size=args.batch_size, shuffle=True), ds
 
 
@@ -95,12 +93,12 @@ def main():
     model.train()
     for epoch in range(args.epochs):
         total, n = 0.0, 0
-        for batch in tqdm(loader, desc=f"epoch {epoch}"):
-            ids = batch["input_ids"].to(args.device)
-            mask = batch["attention_mask"].to(args.device)
-            # pad = eos, so unmasked labels would train on runs of padding;
-            # -100 drops them, matching the masked loss the projection uses
-            labels = ids.masked_fill(mask == 0, -100)
+        for ids, mask, loss_mask in tqdm(loader, desc=f"epoch {epoch}"):
+            ids, mask = ids.to(args.device), mask.to(args.device)
+            # -100 drops non-targets: padding (pad = eos, so unmasked labels
+            # would train on runs of it) and, with --loss-on response, the
+            # prompt. The projection masks the same tokens via loss_mask.
+            labels = ids.masked_fill(loss_mask.to(args.device) == 0, -100)
             out = model(input_ids=ids, attention_mask=mask, labels=labels)
             out.loss.backward()
             opt.step()

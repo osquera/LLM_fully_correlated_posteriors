@@ -34,16 +34,9 @@ from peft import PeftModel
 from torch.func import functional_call
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from llmproj.data import alpaca_prompt
 from llmproj.paramspace import ParamSpace
 
-# The format of tatsu-lab/alpaca's "text" field, which the adapter was tuned on
-ALPACA = ("Below is an instruction that describes a task. Write a response that "
-          "appropriately completes the request.\n\n### Instruction:\n{instruction}\n\n"
-          "### Response:\n")
-ALPACA_INPUT = ("Below is an instruction that describes a task, paired with an input that "
-                "provides further context. Write a response that appropriately completes "
-                "the request.\n\n### Instruction:\n{instruction}\n\n### Input:\n{input}\n\n"
-                "### Response:\n")
 
 
 def parse_args():
@@ -133,10 +126,8 @@ def main():
         prompt = args.prompt
     elif args.instruction is None:
         raise SystemExit("pass --instruction, or --raw with --prompt / --score")
-    elif args.input:
-        prompt = ALPACA_INPUT.format(instruction=args.instruction, input=args.input)
     else:
-        prompt = ALPACA.format(instruction=args.instruction)
+        prompt = alpaca_prompt(args.instruction, args.input or "")
     prompt_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(args.device)
 
     rows = []  # (token text, p, H, MI)

@@ -29,4 +29,6 @@ uv run python scripts/sample_posterior.py \
     --n-samples 8 \
     --n-iterations 500 \
     --tol 1e-3 \
-    --alpha-tol 0.01
+    --alpha-tol 0.01 \
+    --adapter "$ADAPTER" \
+    --out "$SAMPLES_TOK"

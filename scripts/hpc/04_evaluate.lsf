@@ -15,6 +15,8 @@
 . scripts/hpc/env.sh
 
 uv run python scripts/evaluate_posterior.py \
-    --samples samples/posterior_sequence.pt samples/posterior_token.pt \
+    --samples "$SAMPLES_SEQ" "$SAMPLES_TOK" \
+    --adapter "$ADAPTER" \
+    --out "$EVAL_OUT" \
     --test-split "train[2000:2256]" \
     --n-eval 256

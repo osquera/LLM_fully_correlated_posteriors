@@ -39,6 +39,7 @@ from llmproj.baselines import (
     diagonal_laplace_samples,
     linearized_laplace_samples,
 )
+from llmproj.data import encode_texts
 from llmproj.losses import make_causal_lm_loss
 from llmproj.paramspace import ParamSpace
 
@@ -90,11 +91,10 @@ def main():
     # the projection rows, batched as the sequence sampler did
     ds = load_dataset(sargs["dataset"], split=sargs["split"])
     field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
-    enc = tokenizer(list(ds[field])[: sargs["n_train"]], truncation=True,
-                    max_length=sargs["max_length"], padding="max_length", return_tensors="pt")
+    enc = encode_texts(tokenizer, list(ds[field])[: sargs["n_train"]], sargs["max_length"],
+                       loss_on=sargs.get("loss_on", "all"))
     S = 16
-    batches = [{"input_ids": enc["input_ids"][i : i + S].to(args.device),
-                "attention_mask": enc["attention_mask"][i : i + S].to(args.device)}
+    batches = [{k: v[i : i + S].to(args.device) for k, v in enc.items()}
                for i in range(0, enc["input_ids"].size(0), S)]
     map_rows = per_row_losses(f_seq, theta, batches)
     tols_nats = [t * float(map_rows.mean()) for t in tols]

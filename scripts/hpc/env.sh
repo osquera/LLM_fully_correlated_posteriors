@@ -52,3 +52,20 @@ print(sys.version.split()[0], torch.__version__, torch.cuda.get_device_name(0), 
       'arch list:', torch.cuda.get_arch_list())
 torch.ones(1, device='cuda').add_(1)
 "
+
+# Which tokens carry loss (llmproj.data): LOSS_ON=response fine-tunes and
+# projects on the response only. Its outputs get a "_response" suffix, so the
+# default run's checkpoint, samples and figures are left alone.
+export LOSS_ON="${LOSS_ON:-all}"
+case "$LOSS_ON" in
+    all) SUF="" ;;
+    response) SUF="_response" ;;
+    *) echo "LOSS_ON must be all or response, got '$LOSS_ON'"; exit 1 ;;
+esac
+export ADAPTER="checkpoints/smollm2_lora$SUF"
+export SAMPLES_SEQ="samples/posterior_sequence$SUF.pt"
+export SAMPLES_TOK="samples/posterior_token$SUF.pt"
+export EVAL_OUT="figures/posterior_eval$SUF.json"
+export SWEEP_OUT="figures/tolerance_sweep$SUF"
+export SUF
+echo "LOSS_ON=$LOSS_ON  adapter=$ADAPTER"

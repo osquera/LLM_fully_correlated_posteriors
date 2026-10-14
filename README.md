@@ -36,6 +36,7 @@ uv run pytest -q
 ```bash
 # 1. theta_map: LoRA fine-tune SmolLM2-135M. theta = adapters only (P = 460,800).
 uv run python scripts/finetune_lora.py --model HuggingFaceTB/SmolLM2-135M
+#    (add --loss-on response to fit only the answers; see "what is one datum")
 
 # 2. Draw from q(theta) = N(theta_map, alpha^-1 U_L U_L^T), once per loss mode.
 #    --split MUST match stage 1: we project against theta_map's own training data.
@@ -64,7 +65,24 @@ uv run python scripts/visualize_posterior.py --adapter checkpoints/smollm2_lora 
 On DTU HPC: `sh scripts/hpc/submit_pipeline.sh` submits stages 1-3 as four
 dependent LSF jobs (the two loss modes sample in parallel). `SKIP_FINETUNE=1`
 reuses an existing `checkpoints/smollm2_lora`. The tolerance sweep is a
-separate job once samples exist: `bsub < scripts/hpc/05_sweep_tolerance.lsf`.
+separate job once samples exist: `bsub < scripts/hpc/05_sweep_tolerance.lsf`;
+`submit_pipeline.sh` also chains it after the evaluation.
+`LOSS_ON=response sh scripts/hpc/submit_pipeline.sh` runs the response-only
+variant into `*_response` outputs, and `SKIP_TOKEN=1` leaves out the ~22 h
+token-mode job.
+
+Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
+
+- `bsub < scripts/hpc/07_analyze.lsf` runs `scripts/analyze_posterior.py`:
+  (1) whether MI predicts the MAP's errors *beyond* its own entropy and
+  confidence (error AUROC within entropy deciles, and a cross-validated
+  logistic regression with and without MI); (2) the loss change on the
+  fine-tuning sequences the projection never constrained (`train[256:2000]`);
+  (3) near-OOD sets put in the Alpaca template (Dolly, CodeAlpaca, GSM8K,
+  Spanish Alpaca), next to WikiText. Writes `figures/analysis*.json`.
+- `bsub < scripts/hpc/06_seeds.lsf` re-draws the sequence-mode posterior with
+  seeds 1-4, evaluates seeds 0-4, and writes mean ± std with
+  `scripts/aggregate_seeds.py`.
 
 ### Trying it by hand
 
@@ -322,6 +340,21 @@ This is not a flaw in the method's design, beyond the misprint: it targets
 
 The paper does not address sequence models, so this trade-off is unexplored and
 is a plausible contribution in itself.
+
+A second choice is *which tokens* carry loss (`--loss-on`, `llmproj.data`):
+
+- `all` (default) — every non-padding token of Alpaca's `text` field, so the
+  fixed preamble ("Below is an instruction…") and the instruction are fit and
+  constrained too. Near-identical template tokens add many near-duplicate rows
+  in token mode.
+- `response` — only the tokens after `### Response:`. The model still sees the
+  prompt, but fine-tuning fits, and the projection constrains, only what the
+  model is asked to produce. Train and test metrics score the same tokens;
+  OOD text has no response, so it is always scored on every token.
+
+Fine-tuning records the choice in the adapter's `run.json`, and
+`sample_posterior.py` reads it from there unless overridden, so the projection
+constrains exactly the tokens θ_map was fit to.
 
 ## Evaluation plan
 

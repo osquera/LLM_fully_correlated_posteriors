@@ -1,0 +1,37 @@
+#!/bin/sh
+# Error bars for sequence mode: re-draw the posterior with seeds 1..4 (new
+# eps, new isotropic and Laplace draws, alpha re-measured on the new
+# directions) and evaluate each; seed 0 is the existing samples file,
+# re-evaluated so every seed has the same metrics. ~25 min per seed.
+# Then: uv run python scripts/aggregate_seeds.py figures/posterior_eval*_seed*.json
+# Submit after stage 2a:   bsub < scripts/hpc/06_seeds.lsf   (LOSS_ON=response ... too)
+#BSUB -J pb_seeds
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_seeds.out
+#BSUB -e logs/%J_seeds.err
+
+. scripts/hpc/env.sh
+
+stem="${SAMPLES_SEQ%.pt}"
+eval_stem="${EVAL_OUT%.json}"
+for seed in 0 1 2 3 4; do
+    if [ "$seed" != 0 ]; then
+        uv run python scripts/sample_posterior.py \
+            --loss-mode sequence --projector exact --n-train 256 --proj-batch-size 16 \
+            --n-samples 16 --alpha-tol 0.01 --adapter "$ADAPTER" \
+            --seed "$seed" --out "${stem}_seed$seed.pt"
+        samples="${stem}_seed$seed.pt"
+    else
+        samples="$SAMPLES_SEQ"
+    fi
+    uv run python scripts/evaluate_posterior.py \
+        --samples "$samples" --adapter "$ADAPTER" \
+        --test-split "train[2000:2256]" --n-eval 256 \
+        --out "${eval_stem}_seed$seed.json"
+done
+uv run python scripts/aggregate_seeds.py "${eval_stem}"_seed*.json --out "${eval_stem}_seeds.json"

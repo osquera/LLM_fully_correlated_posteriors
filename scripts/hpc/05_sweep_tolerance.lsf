@@ -5,6 +5,7 @@
 # one grid scan per direction (~1 h for 16 + 8 directions). The JSON is
 # rewritten after every tolerance, so a job cut short keeps what it finished.
 # Submit on its own after stages 2a/2b:   bsub < scripts/hpc/05_sweep_tolerance.lsf
+# (prefix LOSS_ON=response for the response-only run)
 #BSUB -J pb_sweep
 #BSUB -q gpua100
 #BSUB -gpu "num=1:mode=exclusive_process"
@@ -18,8 +19,10 @@
 . scripts/hpc/env.sh
 
 uv run python scripts/sweep_tolerance.py \
-    --samples samples/posterior_sequence.pt samples/posterior_token.pt \
+    --samples "$SAMPLES_SEQ" "$SAMPLES_TOK" \
+    --adapter "$ADAPTER" \
+    --out "$SWEEP_OUT.json" \
     --tols 0.005 0.01 0.02 0.05 0.1 0.2 \
     --test-split "train[2000:2256]" \
     --n-eval 256
-uv run python scripts/plot_tolerance_sweep.py
+uv run python scripts/plot_tolerance_sweep.py --sweep "$SWEEP_OUT.json" --out "$SWEEP_OUT.png"

@@ -37,6 +37,7 @@ from peft import PeftModel
 from torch.func import functional_call
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from llmproj.data import encode_texts
 from llmproj.paramspace import ParamSpace
 
 N_BINS = 15
@@ -61,10 +62,9 @@ def parse_args():
     return ap.parse_args()
 
 
-def encode(tokenizer, texts, max_length):
+def encode(tokenizer, texts, max_length, loss_on="all"):
     texts = [t for t in texts if t and t.strip()]
-    return tokenizer(texts, truncation=True, max_length=max_length,
-                     padding="max_length", return_tensors="pt")
+    return encode_texts(tokenizer, texts, max_length, loss_on=loss_on)
 
 
 def auroc(neg: torch.Tensor, pos: torch.Tensor) -> float:
@@ -143,7 +143,7 @@ def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
         ids = enc["input_ids"][i : i + batch_size].to(device)
         mask = enc["attention_mask"][i : i + batch_size].to(device)
         tgt = ids[:, 1:]
-        valid = mask[:, 1:].bool()
+        valid = enc["loss_mask"][i : i + batch_size, 1:].to(device).bool()
         vf = valid.float()
 
         p_bar, h_mean = None, None
@@ -209,9 +209,12 @@ def build_sets(tokenizer, sargs, args):
     ds = load_dataset(sargs["dataset"], split=sargs["split"])
     field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
     max_len = sargs["max_length"]
-    train_enc = encode(tokenizer, list(ds[field])[: sargs["n_train"]], max_len)
+    # train and test score the tokens the projection constrained; WikiText has
+    # no response, so ood always scores every token
+    loss_on = sargs.get("loss_on", "all")
+    train_enc = encode(tokenizer, list(ds[field])[: sargs["n_train"]], max_len, loss_on)
     test_ds = load_dataset(sargs["dataset"], split=args.test_split)
-    test_enc = encode(tokenizer, list(test_ds[field])[: args.n_eval], max_len)
+    test_enc = encode(tokenizer, list(test_ds[field])[: args.n_eval], max_len, loss_on)
     ood_ds = load_dataset(args.ood_dataset, args.ood_config, split=args.ood_split)
     ood_field = "text" if "text" in ood_ds.column_names else ood_ds.column_names[0]
     # WikiText has many short lines; keep the long ones so the sets are comparable
@@ -279,7 +282,9 @@ def main():
         raise SystemExit(f"none of {args.samples} exist")
     blobs = {p: torch.load(p, weights_only=False) for p in files}
     sargs = next(iter(blobs.values()))["args"]
-    same = ("dataset", "split", "text_field", "n_train", "max_length")
+    same = ("dataset", "split", "text_field", "n_train", "max_length", "loss_on")
+    for blob in blobs.values():
+        blob["args"].setdefault("loss_on", "all")  # files from before --loss-on
     for p, blob in blobs.items():
         if any(blob["args"][k] != sargs[k] for k in same):
             raise SystemExit(f"{p} was projected against different training data: "

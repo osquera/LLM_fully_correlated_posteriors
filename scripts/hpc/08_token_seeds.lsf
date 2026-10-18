@@ -1,0 +1,23 @@
+#!/bin/sh
+# Error bars for token mode, part 1: re-draw the token-mode posterior with
+# seeds 1 and 2 (seed 0 is the existing samples file). One array element per
+# seed, as each projection takes ~22 h of the 24 h limit; evaluation is a
+# separate job (09_token_seeds_eval.lsf) so it does not eat into that.
+# Submit both with:   sh scripts/hpc/submit_token_seeds.sh   (LOSS_ON=response ... too)
+#BSUB -J pb_tseed[1-2]
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_%I_tseed.out
+#BSUB -e logs/%J_%I_tseed.err
+
+. scripts/hpc/env.sh
+
+seed="$LSB_JOBINDEX"
+uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --n-train 256 --proj-batch-size 8 \
+    --n-samples 8 --n-iterations 500 --tol 1e-3 --alpha-tol 0.01 \
+    --adapter "$ADAPTER" --seed "$seed" --out "${SAMPLES_TOK%.pt}_seed$seed.pt"

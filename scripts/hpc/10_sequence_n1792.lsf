@@ -1,0 +1,35 @@
+#!/bin/sh
+# Is sequence mode only "too vague" because it has few constraints? Re-run it
+# with 1792 sequences (7x the J^L rows of the 256-sequence run; dense J^L is
+# ~3.3 GB, so still the exact path), then evaluate and analyse it.
+#
+# Not all 2000: the last 208 sequences of the fine-tuning split stay out of
+# the projection, so analyze_posterior.py still has fit-but-never-projected
+# train data to test Lemma 4.3 on (train[1792:2000]).
+# Its own files, as evaluate/analyze need one n_train per call.
+# Submit after the fine-tune:   bsub < scripts/hpc/10_sequence_n1792.lsf
+#BSUB -J pb_seq1792
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 10:00
+#BSUB -o logs/%J_seq1792.out
+#BSUB -e logs/%J_seq1792.err
+
+. scripts/hpc/env.sh
+
+samples="samples/posterior_sequence_n1792$SUF.pt"
+uv run python scripts/sample_posterior.py \
+    --loss-mode sequence --projector exact --n-train 1792 --proj-batch-size 16 \
+    --n-samples 16 --alpha-tol 0.01 --max-gb 8 \
+    --adapter "$ADAPTER" --out "$samples"
+uv run python scripts/evaluate_posterior.py \
+    --samples "$samples" --adapter "$ADAPTER" \
+    --test-split "train[2000:2256]" --n-eval 256 \
+    --out "figures/posterior_eval_seq1792$SUF.json"
+uv run python scripts/analyze_posterior.py \
+    --samples "$samples" --adapter "$ADAPTER" \
+    --test-split "train[2000:2256]" --n-eval 256 \
+    --out "figures/analysis_seq1792$SUF.json"

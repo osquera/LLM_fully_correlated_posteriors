@@ -68,8 +68,8 @@ reuses an existing `checkpoints/smollm2_lora`. The tolerance sweep is a
 separate job once samples exist: `bsub < scripts/hpc/05_sweep_tolerance.lsf`;
 `submit_pipeline.sh` also chains it after the evaluation.
 `LOSS_ON=response sh scripts/hpc/submit_pipeline.sh` runs the response-only
-variant into `*_response` outputs, and `SKIP_TOKEN=1` leaves out the ~22 h
-token-mode job.
+variant into `*_response` outputs, `SKIP_TOKEN=1` leaves out the ~22 h
+token-mode job and `SKIP_SEQUENCE=1` the sequence-mode one.
 
 Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
 
@@ -83,6 +83,27 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
 - `bsub < scripts/hpc/06_seeds.lsf` re-draws the sequence-mode posterior with
   seeds 1-4, evaluates seeds 0-4, and writes mean ± std with
   `scripts/aggregate_seeds.py`.
+- `sh scripts/hpc/submit_token_seeds.sh` does the same for token mode with
+  seeds 0-2: two ~22 h projections in parallel (`08_token_seeds.lsf`, a job
+  array), then one evaluation job (`09_token_seeds_eval.lsf`) writing
+  `figures/posterior_eval_token_seeds.json`.
+- `bsub < scripts/hpc/10_sequence_n1792.lsf` re-runs sequence mode with 1792
+  constrained sequences instead of 256, to check whether sequence mode only
+  falls short for lack of constraints. The last 208 fine-tuning sequences stay
+  out of the projection, as never-projected train data for the analysis.
+- `bsub < scripts/hpc/11_semantic.lsf` measures uncertainty about the
+  *meaning* of an answer instead of the next token
+  (`scripts/semantic_uncertainty.py`, maths in `llmproj.semantic`). Every
+  model answers 200 AmbigQA, TriviaQA and NQ-open questions S x N times
+  (5-shot, Alpaca template); answers are clustered by bidirectional
+  entailment (semantic entropy) and embedded, and the spread is split into
+  aleatoric (within a posterior sample) and epistemic (between samples,
+  shuffle-corrected) parts. `scripts/semantic_tables.py` writes
+  `figures/semantic_uncertainty.md`: answer quality, detection AUROCs with
+  bootstrap intervals (ambiguous AmbigQA questions; wrong TriviaQA / NQ
+  answers) and mean scores per group.
+- `scripts/plot_followups.py` plots `analysis.json` and the seed summary
+  (`figures/followups.png`).
 
 ### Trying it by hand
 

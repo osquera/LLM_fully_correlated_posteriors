@@ -1,0 +1,27 @@
+#!/bin/sh
+# Error bars for token mode, part 2: evaluate seed 0 (the existing samples)
+# and every seed 08_token_seeds.lsf finished, then aggregate.
+# ~10 min per seed. Submitted by submit_token_seeds.sh.
+#BSUB -J pb_tseed_eval
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 2:00
+#BSUB -o logs/%J_tseed_eval.out
+#BSUB -e logs/%J_tseed_eval.err
+
+. scripts/hpc/env.sh
+
+stem="${SAMPLES_TOK%.pt}"
+eval_stem="${EVAL_OUT%.json}_token"
+for seed in 0 1 2; do
+    [ "$seed" = 0 ] && samples="$SAMPLES_TOK" || samples="${stem}_seed$seed.pt"
+    [ -f "$samples" ] || { echo "no $samples, skipping seed $seed"; continue; }
+    uv run python scripts/evaluate_posterior.py \
+        --samples "$samples" --adapter "$ADAPTER" \
+        --test-split "train[2000:2256]" --n-eval 256 \
+        --out "${eval_stem}_seed$seed.json"
+done
+uv run python scripts/aggregate_seeds.py "${eval_stem}"_seed*.json --out "${eval_stem}_seeds.json"

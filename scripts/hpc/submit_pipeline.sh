@@ -8,6 +8,7 @@
 #        reuse theta_map:   SKIP_FINETUNE=1 sh scripts/hpc/submit_pipeline.sh
 #        response only:     LOSS_ON=response sh scripts/hpc/submit_pipeline.sh
 #        no token mode:     SKIP_TOKEN=1 sh scripts/hpc/submit_pipeline.sh  (~22 h saved)
+#        token mode only:   SKIP_SEQUENCE=1 sh scripts/hpc/submit_pipeline.sh
 # The variables combine. LOSS_ON=response writes *_response outputs, leaving
 # the default run's alone (see env.sh).
 # Watch with `bstat`, `bpeek <jobid>`; kill with `bkill <jobid>`.
@@ -33,16 +34,26 @@ else
     echo "finetune: $j1 (loss on $LOSS_ON)"
 fi
 
-j2=$(submit $dep < scripts/hpc/02_sample_sequence.lsf)
+if [ "${SKIP_SEQUENCE:-0}" = "1" ] && [ "${SKIP_TOKEN:-0}" = "1" ]; then
+    echo "SKIP_SEQUENCE and SKIP_TOKEN leave nothing to sample"; exit 1
+fi
+waits=""
+if [ "${SKIP_SEQUENCE:-0}" = "1" ]; then
+    echo "sequence: skipped"
+else
+    j2=$(submit $dep < scripts/hpc/02_sample_sequence.lsf)
+    waits="done($j2)"
+    echo "sequence: $j2"
+fi
 if [ "${SKIP_TOKEN:-0}" = "1" ]; then
-    wait_for="done($j2)"
-    echo "sequence: $j2   token: skipped"
+    echo "token: skipped"
 else
     j3=$(submit $dep < scripts/hpc/03_sample_token.lsf)
     # ended(), not done(), for the token job: evaluate whatever finished.
-    wait_for="done($j2) && ended($j3)"
-    echo "sequence: $j2   token: $j3"
+    waits="${waits:+$waits && }ended($j3)"
+    echo "token: $j3"
 fi
+wait_for="$waits"
 
 j4=$(submit -w "$wait_for" < scripts/hpc/04_evaluate.lsf)
 j5=$(submit -w "$wait_for" < scripts/hpc/05_sweep_tolerance.lsf)

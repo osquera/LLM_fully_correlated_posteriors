@@ -19,7 +19,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from semantic_tables import TASKS, auroc_ci, scores_for
+from semantic_tables import TASKS, auroc_ci, scores_for, task_records
 
 SHOW = [  # (score key, label)
     ("MAP token entropy (greedy)", "MAP token entropy"),
@@ -32,7 +32,8 @@ SHOW = [  # (score key, label)
     ("sequence/projected_measured: SE epistemic", "seq proj.: SE epistemic"),
     ("token/isotropic_measured: SE epistemic", "token iso.: SE epistemic"),
 ]
-TASK_COLOR = {"AmbigQA: ambiguous": "C3", "TriviaQA: MAP wrong": "C0", "NQ-open: MAP wrong": "C1"}
+TASK_COLOR = {"AmbigQA: ambiguous": "C3", "TriviaQA: MAP wrong": "C0", "NQ-open: MAP wrong": "C1",
+              "OOD: GSM8K vs TriviaQA": "C4"}
 MODEL_COLOR = {"map": "k", "sequence/projected_measured": "C0", "sequence/isotropic_measured": "C7",
                "token/projected_measured": "C2", "token/isotropic_measured": "0.55"}
 
@@ -52,22 +53,23 @@ def main():
     (a, b), (c, d) = axes
 
     # a: AUROC forest
-    y = np.arange(len(SHOW))
-    for k, (t, (ds, pos, _)) in enumerate(TASKS.items()):
-        rs = [r for r in recs if r["dataset"] == ds]
-        lab = np.array([pos(r) for r in rs])
+    show = [s for s in SHOW if s[0] in scores_for(recs[:1], models)]  # models in this run
+    y = np.arange(len(show))
+    tasks = [t for t in TASKS if len(task_records(recs, t)[0])]
+    for k, t in enumerate(tasks):
+        rs, lab = task_records(recs, t)
         sc = scores_for(rs, models)
-        for i, (key, _) in enumerate(SHOW):
+        for i, (key, _) in enumerate(show):
             v, lo, hi = auroc_ci(sc[key], lab, args.n_boot, rng)
             if np.isnan(v):
                 continue
-            yy = i + (k - 1) * 0.25
+            yy = i + (k - (len(tasks) - 1) / 2) * 0.75 / len(tasks)
             a.errorbar(v, yy, xerr=[[v - lo], [hi - v]], fmt="o", color=TASK_COLOR[t], ms=5,
                        capsize=2, label=f"{t} ({lab.sum()}/{(~lab).sum()})" if i == 0 else None)
     a.axvline(0.5, c="k", ls=":", lw=1)
     for sep in (3.5, 4.5):
         a.axhline(sep, c="0.85", lw=0.8)
-    a.set(yticks=y, yticklabels=[s[1] for s in SHOW], xlim=(0.0, 1.0),
+    a.set(yticks=y, yticklabels=[s[1] for s in show], xlim=(0.0, 1.0),
           xlabel="AUROC [95% bootstrap CI]  (0.5 = blind)")
     a.invert_yaxis()
     a.legend(fontsize=8.5, loc="lower left", title="task (positive / negative)", title_fontsize=8.5)

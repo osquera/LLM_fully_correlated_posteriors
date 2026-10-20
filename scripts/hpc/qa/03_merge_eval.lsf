@@ -1,0 +1,37 @@
+#!/bin/sh
+# QA stage 3: merge the projection parts (alpha re-measured over all of them),
+# then evaluate:
+#   - evaluate_posterior.py: Lemma 4.3 on the projected answers, held-out
+#     TriviaQA answers (validation), WikiText OOD
+#   - semantic_uncertainty.py: AmbigQA, TriviaQA, NQ-open and GSM8K (an OOD
+#     kind of question), 0-shot = exactly the training prompt
+#   - semantic_tables.py, semantic_likelihood.py, plot_semantic.py
+# ~2 h at 135M, ~4 h at 360M. Submitted by submit_qa.sh.
+#BSUB -J pb_qa_eval
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 10:00
+#BSUB -o logs/%J_qa_eval.out
+#BSUB -e logs/%J_qa_eval.err
+
+. scripts/hpc/qa/env_qa.sh
+
+uv run python scripts/merge_samples.py "$PARTS_DIR"/part*.pt --out "$SAMPLES_QA"
+
+uv run python scripts/evaluate_posterior.py \
+    --samples "$SAMPLES_QA" --base-model "$BASE_MODEL" --adapter "$ADAPTER" \
+    --test-split "validation[:256]" --n-eval 256 \
+    --out "figures/posterior_eval_$TAG.json"
+
+sem="figures/semantic_uncertainty_$TAG.json"
+uv run python scripts/semantic_uncertainty.py \
+    --samples "$SAMPLES_QA" --base-model "$BASE_MODEL" --adapter "$ADAPTER" \
+    --datasets ambigqa triviaqa nq_open gsm8k --n-questions 200 \
+    --n-posterior 8 --n-answers 10 --temperature 0.7 --few-shot 0 \
+    --out "$sem"
+uv run python scripts/semantic_tables.py --results "$sem"
+uv run python scripts/semantic_likelihood.py --results "$sem" --samples "$SAMPLES_QA"
+uv run python scripts/plot_semantic.py --results "$sem" --out "figures/semantic_$TAG.png"

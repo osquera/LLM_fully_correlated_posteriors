@@ -117,3 +117,37 @@ def is_correct(answer: str, golds: Sequence[str]) -> bool:
     """A gold alias appears (as whole words) in the normalised answer."""
     a = f" {normalize_answer(answer)} "
     return any(g and f" {g} " in a for g in map(normalize_answer, golds))
+
+
+# ---------------------------------------------------------------- likelihood-based
+
+def prob_decomposition(q: np.ndarray) -> dict[str, float]:
+    """q: (S, K), row s = posterior sample s's distribution over meanings."""
+    q = np.asarray(q, dtype=float)
+    total = entropy(q.mean(0))
+    alea = float(np.mean([entropy(row) for row in q]))
+    return {"total": total, "aleatoric": alea, "epistemic": total - alea}
+
+
+def reweighted_cluster_probs(logp: np.ndarray, logp_proposal: np.ndarray, counts: np.ndarray,
+                             clusters: np.ndarray) -> np.ndarray:
+    """Each posterior sample's distribution over meanings, from one shared set
+    of answers instead of fresh samples per model.
+
+    The answers were drawn from a proposal model (the MAP); ``counts[u]`` is
+    how often unique answer u was drawn. Importance sampling gives sample s's
+    probability of meaning c as
+
+        q_s(c)  ∝  sum_{u in c} counts[u] * p_s(u) / p_proposal(u)
+
+    logp: (S, U) log p_s(u); logp_proposal: (U,); clusters: (U,) meaning ids.
+    Every sample is evaluated on the *same* answers, so there is no sampling
+    noise between samples: when all p_s are equal, the q_s are exactly equal
+    and the epistemic part is exactly zero. Returns (S, K).
+    """
+    logw = (np.asarray(logp, float) - np.asarray(logp_proposal, float)[None]
+            + np.log(np.asarray(counts, float))[None])
+    w = np.exp(logw - logw.max(1, keepdims=True))
+    k = int(np.max(clusters)) + 1
+    q = np.stack([np.bincount(clusters, weights=row, minlength=k) for row in w])
+    return q / q.sum(1, keepdims=True)

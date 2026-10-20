@@ -18,19 +18,19 @@ import json
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llmproj.data import encode_texts
+from llmproj.data import encode_texts, load_texts
 
 
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="HuggingFaceTB/SmolLM2-135M")
-    ap.add_argument("--dataset", default="tatsu-lab/alpaca")
+    ap.add_argument("--dataset", default="tatsu-lab/alpaca",
+                    help="a Hugging Face dataset, or a QA name in llmproj.data.QA_DATASETS")
     ap.add_argument("--split", default="train[:2000]")
     ap.add_argument("--text-field", default="text")
     ap.add_argument("--max-length", type=int, default=256)
@@ -53,9 +53,8 @@ def parse_args():
 
 
 def build_loader(args, tokenizer):
-    ds = load_dataset(args.dataset, split=args.split)
-    field = args.text_field if args.text_field in ds.column_names else ds.column_names[0]
-    enc = encode_texts(tokenizer, ds[field], args.max_length, loss_on=args.loss_on)
+    texts = load_texts(args.dataset, args.split, args.text_field)
+    enc = encode_texts(tokenizer, texts, args.max_length, loss_on=args.loss_on)
     print(f"loss on {args.loss_on}: {int(enc['loss_mask'].sum())} target tokens of "
           f"{int(enc['attention_mask'].sum())}")
     ds = TensorDataset(enc["input_ids"], enc["attention_mask"], enc["loss_mask"])

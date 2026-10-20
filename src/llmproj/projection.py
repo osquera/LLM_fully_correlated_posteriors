@@ -41,20 +41,24 @@ class BatchFactor:
     rank: int
 
 
-def _jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: ParamSpace, R: int) -> torch.Tensor:
-    """Form J J^T (R x R) matrix-free.
+def _jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: ParamSpace, R: int,
+         rows: torch.Tensor | None = None) -> torch.Tensor:
+    """Form J J^T matrix-free, restricted to ``rows`` (default: all R).
 
-    Column j is J (J^T e_j): one VJP followed by one JVP. Costs 2R passes per
-    batch, versus P passes to instantiate J -- which is the whole point, since
-    R = batch rows (tens) and P = parameters (millions).
+    Column j is J (J^T e_j): one VJP followed by one JVP. Costs 2 passes per
+    row, versus P passes to instantiate J -- which is the whole point, since
+    R = batch rows (tens) and P = parameters (millions). Rows known to be
+    exactly zero (masked tokens) need no passes: pass the others as ``rows``
+    to get the (len(rows) x len(rows)) block, the only non-zero one.
     """
+    rows = torch.arange(R) if rows is None else rows
     basis = torch.eye(R, device=space.device, dtype=torch.float32)
     cols = []
-    for j in range(R):
+    for j in rows.tolist():
         _, vjp_fn = vjp(f_batch, theta)
         jt_e = vjp_fn(basis[j].to(space.dtype))[0]
         _, jjt_e = jvp(f_batch, (theta,), (jt_e,))
-        cols.append(jjt_e.float())
+        cols.append(jjt_e.float()[rows.to(jjt_e.device)])
     return torch.stack(cols, dim=1)
 
 
@@ -70,15 +74,25 @@ def precompute_batch_pinv(
 
     These factors are reused by every posterior sample, so this is the
     "preprocessing" column of the paper's Table 1.
+
+    A batch may carry ``row_mask`` (R,), True where a row of J can be
+    non-zero; the other rows are exact zeros (padding, or the prompt under a
+    response-only loss) and are skipped. The factor is the same either way:
+    its eigenvectors are zero on the skipped rows.
     """
     factors: list[BatchFactor] = []
     it = tqdm(batches, desc="precompute (JJ^T)^+", disable=not progress)
     for batch in it:
         f_batch = lambda p: f(p, batch)
         R = int(f_batch(theta).numel())
-        jjt = _jjt(f_batch, theta, space, R)
+        rows = None if "row_mask" not in batch else batch["row_mask"].nonzero().squeeze(1).cpu()
+        jjt = _jjt(f_batch, theta, space, R, rows)
         jjt = 0.5 * (jjt + jjt.T)  # symmetrise away round-off before eigh
         eigvals, eigvecs = torch.linalg.eigh(jjt)
+        if rows is not None:  # back to all R rows, zero on the skipped ones
+            full = torch.zeros(R, eigvecs.size(1), device=eigvecs.device, dtype=eigvecs.dtype)
+            full[rows.to(eigvecs.device)] = eigvecs
+            eigvecs = full
 
         lam_max = eigvals.max().clamp(min=0.0)
         keep = eigvals > rtol * lam_max

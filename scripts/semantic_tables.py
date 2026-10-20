@@ -23,11 +23,23 @@ from pathlib import Path
 
 import numpy as np
 
-TASKS = {  # name -> (dataset, record -> positive?, description)
-    "AmbigQA: ambiguous": ("ambigqa", lambda r: r["ambiguous"] == 1, "ambiguous vs one answer"),
-    "TriviaQA: MAP wrong": ("triviaqa", lambda r: not r["map_greedy_correct"], "wrong vs right"),
-    "NQ-open: MAP wrong": ("nq_open", lambda r: not r["map_greedy_correct"], "wrong vs right"),
+TASKS = {  # name -> (datasets, record -> positive?, description)
+    "AmbigQA: ambiguous": (("ambigqa",), lambda r: r["ambiguous"] == 1, "ambiguous vs one answer"),
+    "TriviaQA: MAP wrong": (("triviaqa",), lambda r: not r["map_greedy_correct"], "wrong vs right"),
+    "NQ-open: MAP wrong": (("nq_open",), lambda r: not r["map_greedy_correct"], "wrong vs right"),
+    # what an *epistemic* score should detect: a different kind of question
+    "OOD: GSM8K vs TriviaQA": (("triviaqa", "gsm8k"), lambda r: r["dataset"] == "gsm8k",
+                               "maths vs trivia"),
 }
+
+
+def task_records(recs: list[dict], task: str) -> tuple[list[dict], np.ndarray]:
+    """The records a task scores, and their labels (empty if it has none)."""
+    ds, pos, _ = TASKS[task]
+    rs = [r for r in recs if r["dataset"] in ds]
+    if len({r["dataset"] for r in rs}) < len(ds):  # e.g. no gsm8k in this run
+        rs = []
+    return rs, np.array([pos(r) for r in rs], dtype=bool)
 PARTS = [("sem", "total", "SE total"), ("sem", "aleatoric", "SE aleatoric"),
          ("sem", "epistemic_corrected", "SE epistemic"),
          ("emb", "total", "emb total"), ("emb", "aleatoric", "emb aleatoric"),
@@ -108,21 +120,20 @@ def main():
                  + [f"meanings of {SN}: {m}" for m in models], rows)]
 
     # 2 AUROC
-    header = ["score"] + [f"{t} ({TASKS[t][2]})" for t in TASKS]
     cols, counts = {}, []
-    for t, (d, pos, _) in TASKS.items():
-        rs = [r for r in recs if r["dataset"] == d]
+    for t in TASKS:
+        rs, lab = task_records(recs, t)
         if not rs:
             continue
-        lab = np.array([pos(r) for r in rs])
         counts.append(f"{t}: {lab.sum()} positive / {(~lab).sum()} negative")
         cols[t] = {k: auroc_ci(v, lab, args.n_boot, rng) for k, v in scores_for(rs, models).items()}
+    header = ["score"] + [f"{t} ({TASKS[t][2]})" for t in cols]
     names = list(next(iter(cols.values()))) if cols else []
     rows = []
     for k in names:
         cells = []
-        for t in TASKS:
-            if t not in cols or np.isnan(cols[t][k][0]):
+        for t in cols:
+            if np.isnan(cols[t][k][0]):
                 cells.append("n/a")
             else:
                 v, lo, hi = cols[t][k]
@@ -135,13 +146,16 @@ def main():
 
     # 3 means per group
     rows = []
-    for t, (d, pos, _) in TASKS.items():
-        rs = [r for r in recs if r["dataset"] == d]
+    for t in cols:
+        rs, lab = task_records(recs, t)
         for flag in (True, False):
-            g = [r for r in rs if pos(r) == flag]
+            g = [r for r, l in zip(rs, lab) if l == flag]
             if not g:
                 continue
-            name = {("ambigqa", True): "ambiguous", ("ambigqa", False): "one answer"}.get(
+            d = "+".join(TASKS[t][0])
+            name = {("ambigqa", True): "ambiguous", ("ambigqa", False): "one answer",
+                    ("triviaqa+gsm8k", True): "GSM8K (OOD)",
+                    ("triviaqa+gsm8k", False): "TriviaQA"}.get(
                 (d, flag), "MAP wrong" if flag else "MAP right")
             for m in models:
                 rows.append([d, name, str(len(g)), m] + [

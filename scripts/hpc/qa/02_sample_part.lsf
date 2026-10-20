@@ -1,0 +1,34 @@
+#!/bin/sh
+# QA stage 2: token-mode projection, one part per array element (2 samples,
+# seed = array index), merged by 03_merge_eval.lsf. Only the answer tokens
+# are rows of J^L (~6 per example), and the projector skips the zero rows,
+# so this is far cheaper per sequence than Alpaca token mode. Estimate per
+# part: ~3 h at 135M, ~8 h at 360M. Submitted by submit_qa.sh.
+#BSUB -J pb_qa_part[1-4]
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 16:00
+#BSUB -o logs/%J_%I_qa_part.out
+#BSUB -e logs/%J_%I_qa_part.err
+
+. scripts/hpc/qa/env_qa.sh
+
+uv run python scripts/sample_posterior.py \
+    --base-model "$BASE_MODEL" \
+    --adapter "$ADAPTER" \
+    --dataset "$QA_DATASET" \
+    --split "$QA_TRAIN" \
+    --max-length "$MAX_LEN" \
+    --n-train "$N_TRAIN" \
+    --loss-mode token \
+    --projector iterative \
+    --proj-batch-size 32 \
+    --n-samples 2 \
+    --n-iterations 500 \
+    --tol 1e-3 \
+    --alpha-tol 0.01 \
+    --seed "$LSB_JOBINDEX" \
+    --out "$PARTS_DIR/part$LSB_JOBINDEX.pt"

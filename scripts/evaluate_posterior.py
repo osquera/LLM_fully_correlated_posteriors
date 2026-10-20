@@ -37,7 +37,7 @@ from peft import PeftModel
 from torch.func import functional_call
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from llmproj.data import encode_texts
+from llmproj.data import encode_texts, load_texts
 from llmproj.paramspace import ParamSpace
 
 N_BINS = 15
@@ -206,15 +206,14 @@ def build_sets(tokenizer, sargs, args):
     """train / test / ood encodings. ``sargs`` are the sampler's args, ``args``
     need test_split, n_eval and the ood_* fields."""
     # train: the very sequences behind J^L, taken from the sampler's own args
-    ds = load_dataset(sargs["dataset"], split=sargs["split"])
-    field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
     max_len = sargs["max_length"]
     # train and test score the tokens the projection constrained; WikiText has
     # no response, so ood always scores every token
     loss_on = sargs.get("loss_on", "all")
-    train_enc = encode(tokenizer, list(ds[field])[: sargs["n_train"]], max_len, loss_on)
-    test_ds = load_dataset(sargs["dataset"], split=args.test_split)
-    test_enc = encode(tokenizer, list(test_ds[field])[: args.n_eval], max_len, loss_on)
+    train = load_texts(sargs["dataset"], sargs["split"], sargs["text_field"])
+    train_enc = encode(tokenizer, train[: sargs["n_train"]], max_len, loss_on)
+    test = load_texts(sargs["dataset"], args.test_split, sargs["text_field"])
+    test_enc = encode(tokenizer, test[: args.n_eval], max_len, loss_on)
     ood_ds = load_dataset(args.ood_dataset, args.ood_config, split=args.ood_split)
     ood_field = "text" if "text" in ood_ds.column_names else ood_ds.column_names[0]
     # WikiText has many short lines; keep the long ones so the sets are comparable

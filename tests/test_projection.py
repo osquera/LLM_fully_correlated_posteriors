@@ -86,6 +86,30 @@ def test_projection_is_idempotent():
     assert rel < 1e-2, f"not idempotent: relative change {rel:.3e}"
 
 
+def test_row_mask_skips_zero_rows_without_changing_the_projection():
+    """Masked rows (padding, prompt) are exact zeros of J: skipping them must
+    give the same factors' action and the same projected vector."""
+    _, space, theta, f0, batches = _toy()
+    gen = torch.Generator().manual_seed(5)
+    for b in batches:
+        b["w"] = (torch.rand(b["y"].shape, generator=gen) > 0.4).to(b["x"].dtype)
+
+    def f(th, batch):
+        return f0(th, batch) * batch["w"]
+
+    masked = [{**b, "row_mask": b["w"] > 0} for b in batches]
+    eps = torch.randn(space.P, generator=torch.Generator().manual_seed(6), dtype=space.dtype)
+    v_all = project_vector(eps.clone(), f, theta, space, batches,
+                           precompute_batch_pinv(f, theta, space, batches, progress=False),
+                           n_iterations=5)
+    v_skip = project_vector(eps.clone(), f, theta, space, masked,
+                            precompute_batch_pinv(f, theta, space, masked, progress=False),
+                            n_iterations=5)
+    # J J^T is formed in float32 either way; eigh on the smaller block rounds
+    # differently, so agreement is to float32 precision, not exact
+    assert float((v_all - v_skip).norm() / v_all.norm()) < 1e-4
+
+
 @pytest.mark.parametrize("alpha_scale", [1e2, 1e4, 1e6])
 def test_lemma_4_3_loss_preservation(alpha_scale):
     """Loss change must fall ~quadratically in ||delta||, i.e. ~linearly in 1/alpha."""

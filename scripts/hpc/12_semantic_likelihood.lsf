@@ -1,0 +1,21 @@
+#!/bin/sh
+# Likelihood-based semantic uncertainty (scripts/semantic_likelihood.py): every
+# posterior sample scores the MAP's answers from 11_semantic.lsf, so the
+# epistemic part has no sampling noise. Needs figures/semantic_uncertainty.json.
+# ~1 h (4 methods x 8 samples + MAP, 600 questions x ~50 answers).
+#   bsub < scripts/hpc/12_semantic_likelihood.lsf      (add -q gpul40s to move queue)
+#BSUB -J pb_semll
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_semll.out
+#BSUB -e logs/%J_semll.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/semantic_likelihood.py \
+    --results "figures/semantic_uncertainty$SUF.json" \
+    --samples "$SAMPLES_SEQ" "$SAMPLES_TOK"

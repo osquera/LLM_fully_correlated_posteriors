@@ -44,6 +44,39 @@ def alpaca_text(instruction: str, input: str = "", output: str = "") -> str:
     return alpaca_prompt(instruction, input) + output
 
 
+# Short-answer QA in the same template. The answer ends in a newline, so a
+# model fine-tuned on it learns to stop there, where generation is cut.
+QA_INSTRUCTION = "Answer the question with a short phrase."
+QA_DATASETS = {  # name -> (hf path, config, row -> (question, answer))
+    "triviaqa": ("mandarjoshi/trivia_qa", "rc.nocontext",
+                 lambda r: (r["question"], r["answer"]["value"])),
+    "nq_open": ("google-research-datasets/nq_open", None,
+                lambda r: (r["question"], r["answer"][0])),
+}
+
+
+def qa_text(question: str, answer: str = "") -> str:
+    return alpaca_text(QA_INSTRUCTION, question, answer + "\n" if answer else "")
+
+
+def load_texts(dataset: str, split: str, text_field: str = "text") -> list[str]:
+    """The training / evaluation texts of ``dataset``.
+
+    A name in QA_DATASETS gives Alpaca-format short-answer QA (``qa_text``);
+    anything else is a Hugging Face dataset whose ``text_field`` (or first
+    column) is used as is, e.g. tatsu-lab/alpaca's "text".
+    """
+    from datasets import load_dataset
+
+    if dataset in QA_DATASETS:
+        path, cfg, row = QA_DATASETS[dataset]
+        ds = load_dataset(path, cfg, split=split)
+        return [qa_text(*row(r)) for r in ds]
+    ds = load_dataset(dataset, split=split)
+    field = text_field if text_field in ds.column_names else ds.column_names[0]
+    return list(ds[field])
+
+
 LossOn = Literal["all", "response"]
 
 

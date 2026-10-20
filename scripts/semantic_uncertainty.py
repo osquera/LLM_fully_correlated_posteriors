@@ -21,6 +21,8 @@ Questions (each in the Alpaca template the model was fine-tuned on):
   triviaqa  TriviaQA (rc.nocontext) and
   nq_open   NQ-open: the MAP's greedy answer right or wrong. The test of
             detecting errors.
+  gsm8k     GSM8K maths word problems (optional): a different kind of
+            question, against TriviaQA. The test of an *epistemic* detector.
 Models: the MAP (S groups of N answers from one model, so its epistemic part
 is the estimator's noise floor) and every method of the samples files.
 
@@ -46,15 +48,17 @@ from peft import PeftModel
 from transformers import (AutoModel, AutoModelForCausalLM,
                           AutoModelForSequenceClassification, AutoTokenizer)
 
+from llmproj.data import QA_INSTRUCTION as INSTRUCTION
 from llmproj.data import alpaca_prompt
 from llmproj.paramspace import ParamSpace
 from llmproj.semantic import (cluster_decomposition, embedding_decomposition,
                               greedy_clusters, is_correct, shuffle_corrected)
 
-INSTRUCTION = "Answer the question with a short phrase."
 # Worked examples in the same template, before the real question: without
 # them a 135M model rarely answers briefly, and every sampled answer is its own
-# meaning cluster, which saturates the entropies.
+# meaning cluster, which saturates the entropies. A model fine-tuned on QA
+# (llmproj.data.QA_DATASETS) already answers briefly: use --few-shot 0, which
+# is then exactly its training prompt.
 FEW_SHOT = [
     ("What is the capital of France?", "Paris"),
     ("Who wrote the play Romeo and Juliet?", "William Shakespeare"),
@@ -125,6 +129,11 @@ def load_questions(name: str, n: int, seed: int) -> list[dict]:
         ds = load_dataset("google-research-datasets/nq_open", split="validation")
         idx = rng.sample(range(len(ds)), n)
         rows = [{"id": str(i), "question": ds[i]["question"], "golds": ds[i]["answer"]} for i in idx]
+    elif name == "gsm8k":  # out-of-distribution questions: maths word problems
+        ds = load_dataset("openai/gsm8k", "main", split="test")
+        idx = rng.sample(range(len(ds)), n)
+        rows = [{"id": str(i), "question": ds[i]["question"],
+                 "golds": [ds[i]["answer"].split("####")[-1].strip()]} for i in idx]
     else:
         raise ValueError(name)
     for r in rows:

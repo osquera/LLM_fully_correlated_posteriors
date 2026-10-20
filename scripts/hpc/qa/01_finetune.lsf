@@ -1,0 +1,26 @@
+#!/bin/sh
+# QA stage 1: theta_map on TriviaQA train[:5000], loss on the answer only, LoRA
+# on every linear layer (~2.4M parameters at 135M). Minutes, not hours.
+# Submitted by scripts/hpc/qa/submit_qa.sh.
+#BSUB -J pb_qa_finetune
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 3:00
+#BSUB -o logs/%J_qa_finetune.out
+#BSUB -e logs/%J_qa_finetune.err
+
+UV_SYNC=1 . scripts/hpc/qa/env_qa.sh
+
+uv run python scripts/finetune_lora.py \
+    --model "$BASE_MODEL" \
+    --dataset "$QA_DATASET" \
+    --split "$QA_TRAIN" \
+    --max-length "$MAX_LEN" \
+    --loss-on response \
+    --lora-targets $LORA_TARGETS \
+    --batch-size 32 \
+    --epochs 3 \
+    --out "$ADAPTER"

@@ -5,8 +5,25 @@ from llmproj.semantic import (
     embedding_decomposition,
     greedy_clusters,
     is_correct,
+    prob_decomposition,
+    reweighted_cluster_probs,
     shuffle_corrected,
 )
+
+
+def test_reweighted_cluster_probs():
+    counts = np.array([3, 1, 2])
+    clusters = np.array([0, 0, 1])
+    lp_map = np.log(np.array([0.3, 0.1, 0.2]))
+    # identical samples: the MAP's empirical distribution, epistemic exactly 0
+    q = reweighted_cluster_probs(np.stack([lp_map, lp_map]), lp_map, counts, clusters)
+    assert np.allclose(q, [[4 / 6, 2 / 6]] * 2)
+    assert prob_decomposition(q)["epistemic"] == 0.0
+    # a sample that doubles the probability of meaning 1's answer moves mass there
+    lp_s = lp_map + np.log(np.array([1.0, 1.0, 2.0]))
+    q = reweighted_cluster_probs(np.stack([lp_map, lp_s]), lp_map, counts, clusters)
+    assert np.allclose(q[1], [4 / 8, 4 / 8])
+    assert prob_decomposition(q)["epistemic"] > 0
 
 
 def test_cluster_decomposition_separates_the_two_cases():

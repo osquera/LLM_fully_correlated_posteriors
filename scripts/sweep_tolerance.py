@@ -28,7 +28,6 @@ import time
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -39,7 +38,7 @@ from llmproj.baselines import (
     diagonal_laplace_samples,
     linearized_laplace_samples,
 )
-from llmproj.data import encode_texts
+from llmproj.data import encode_texts, load_texts
 from llmproj.losses import make_causal_lm_loss
 from llmproj.paramspace import ParamSpace
 
@@ -89,9 +88,8 @@ def main():
     f_seq = make_causal_lm_loss(model, space, frozen, mode="sequence")
 
     # the projection rows, batched as the sequence sampler did
-    ds = load_dataset(sargs["dataset"], split=sargs["split"])
-    field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
-    enc = encode_texts(tokenizer, list(ds[field])[: sargs["n_train"]], sargs["max_length"],
+    texts = load_texts(sargs["dataset"], sargs["split"], sargs["text_field"])
+    enc = encode_texts(tokenizer, texts[: sargs["n_train"]], sargs["max_length"],
                        loss_on=sargs.get("loss_on", "all"))
     S = 16
     batches = [{k: v[i : i + S].to(args.device) for k, v in enc.items()}

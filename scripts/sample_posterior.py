@@ -38,7 +38,6 @@ import time
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -50,7 +49,7 @@ from llmproj.baselines import (
     jacobian_memory_gb,
     linearized_laplace_samples,
 )
-from llmproj.data import encode_texts
+from llmproj.data import encode_texts, load_texts
 from llmproj.losses import make_causal_lm_loss
 from llmproj.paramspace import ParamSpace
 from llmproj.projection import kernel_residual, sample_projected_posterior
@@ -121,15 +120,18 @@ def main():
     f = make_causal_lm_loss(model, space, frozen, mode=args.loss_mode)
     f_seq = make_causal_lm_loss(model, space, frozen, mode="sequence")
 
-    ds = load_dataset(args.dataset, split=args.split)
-    field = args.text_field if args.text_field in ds.column_names else ds.column_names[0]
-    ds = ds.select(range(min(args.n_train, len(ds))))
-    enc = encode_texts(tokenizer, ds[field], args.max_length, loss_on=args.loss_on)
+    texts = load_texts(args.dataset, args.split, args.text_field)[: args.n_train]
+    enc = encode_texts(tokenizer, texts, args.max_length, loss_on=args.loss_on)
     S = args.proj_batch_size
-    batches = [
-        {k: v[i : i + S].to(args.device) for k, v in enc.items()}
-        for i in range(0, enc["input_ids"].size(0), S)
-    ]
+    batches = []
+    for i in range(0, enc["input_ids"].size(0), S):
+        # cut each batch at its longest sequence: trailing padding only adds
+        # zero rows (right-padded, causal), and every row costs JVP/VJP passes
+        L = int(enc["attention_mask"][i : i + S].sum(1).max())
+        b = {k: v[i : i + S, :L].to(args.device) for k, v in enc.items()}
+        if args.loss_mode == "token":
+            b["row_mask"] = b["loss_mask"][:, 1:].reshape(-1).bool()  # the non-zero rows
+        batches.append(b)
     # targets per sequence; in token mode, every other row of J^L is exactly zero
     n_targets = int(enc["loss_mask"][:, 1:].sum())
     print(f"loss on {args.loss_on}: {n_targets} target tokens")

@@ -102,8 +102,40 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
   `figures/semantic_uncertainty.md`: answer quality, detection AUROCs with
   bootstrap intervals (ambiguous AmbigQA questions; wrong TriviaQA / NQ
   answers) and mean scores per group.
+- `bsub < scripts/hpc/12_semantic_likelihood.lsf` re-scores the MAP's answers
+  from that run under every posterior sample (`scripts/semantic_likelihood.py`)
+  and reweights them into each sample's distribution over meanings. All
+  samples are judged on the same answers, so the epistemic part has no
+  sampling noise (exactly 0 for the MAP). Writes
+  `figures/semantic_uncertainty_likelihood.{json,md}`.
 - `scripts/plot_followups.py` plots `analysis.json` and the seed summary
-  (`figures/followups.png`).
+  (`figures/followups.png`); `scripts/plot_constraints.py` compares sequence
+  mode (256 / 1792 sequences) with token mode; `scripts/plot_semantic.py`
+  plots a semantic run.
+
+### Short-answer QA (scripts/hpc/qa/)
+
+The same method on TriviaQA instead of Alpaca: fine-tuned with loss on the
+answer only and LoRA on every linear layer (q, k, v, o, gate, up, down), then
+projected in token mode on 512 training answers. Datasets named in
+`llmproj.data.QA_DATASETS` (`triviaqa`, `nq_open`) work in every script via
+`--dataset`; they are formatted with `llmproj.data.qa_text`.
+
+```bash
+sh scripts/hpc/qa/submit_qa.sh                       # SmolLM2-135M
+SIZE=360M sh scripts/hpc/qa/submit_qa.sh             # SmolLM2-360M
+QUEUE=gpul40s SIZE=360M sh scripts/hpc/qa/submit_qa.sh
+```
+
+The projection runs as parallel parts (2 samples each, own seed) that
+`scripts/merge_samples.py` joins, re-measuring alpha over all directions, so
+no single job approaches the 24 h limit. Zero rows of J^L (padding, and the
+prompt under a response-only loss) are skipped when each batch's J J^T is
+formed (`row_mask`), and each batch is cut at its longest sequence; both
+leave the projection unchanged and make QA token mode cheap. The last job
+evaluates (held-out TriviaQA, WikiText) and runs the semantic test 0-shot on
+AmbigQA, TriviaQA, NQ-open and GSM8K, the last as an out-of-distribution kind
+of question for the epistemic part. Outputs are tagged `qa_<SIZE>`.
 
 ### Trying it by hand
 

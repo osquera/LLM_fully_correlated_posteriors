@@ -36,7 +36,7 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from evaluate_posterior import auroc, encode, evaluate_set
-from llmproj.data import alpaca_text
+from llmproj.data import alpaca_text, load_texts
 from llmproj.paramspace import ParamSpace
 
 # name -> (hf path, config, split, row -> (instruction, input, output))
@@ -190,16 +190,14 @@ def main():
 
     # --- sets
     max_len = sargs["max_length"]
-    ds = load_dataset(sargs["dataset"], split=sargs["split"])
-    field = sargs["text_field"] if sargs["text_field"] in ds.column_names else ds.column_names[0]
-    texts = list(ds[field])
+    texts = load_texts(sargs["dataset"], sargs["split"], sargs["text_field"])
     n = sargs["n_train"]
     unconstrained = texts[n:][: args.max_unconstrained]
+    test = load_texts(sargs["dataset"], args.test_split, sargs["text_field"])
     sets = {
         "train_constrained": encode(tokenizer, texts[:n], max_len, loss_on),
         "train_unconstrained": encode(tokenizer, unconstrained, max_len, loss_on),
-        "test": encode(tokenizer, list(load_dataset(sargs["dataset"], split=args.test_split)[field])
-                       [: args.n_eval], max_len, loss_on),
+        "test": encode(tokenizer, test[: args.n_eval], max_len, loss_on),
     }
     wiki = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
     sets["wikitext"] = encode(tokenizer, [t for t in wiki["text"] if len(t.split()) >= 64]

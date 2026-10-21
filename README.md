@@ -67,7 +67,10 @@ dependent LSF jobs (the two loss modes sample in parallel). `SKIP_FINETUNE=1`
 reuses an existing `checkpoints/smollm2_lora`. The tolerance sweep is a
 separate job once samples exist: `bsub < scripts/hpc/05_sweep_tolerance.lsf`;
 `submit_pipeline.sh` also chains it after the evaluation.
-`LOSS_ON=response sh scripts/hpc/submit_pipeline.sh` runs the response-only
+DTU's LSF does not pass the submitting shell's environment to jobs, so the
+submit scripts write variables such as `LOSS_ON` and `SIZE` into each job
+script (`scripts/hpc/submit_lib.sh`); `VAR=x bsub < job.lsf` by hand does
+*not* work. `LOSS_ON=response sh scripts/hpc/submit_pipeline.sh` runs the response-only
 variant into `*_response` outputs, `SKIP_TOKEN=1` leaves out the ~22 h
 token-mode job and `SKIP_SEQUENCE=1` the sequence-mode one.
 

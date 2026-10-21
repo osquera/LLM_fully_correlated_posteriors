@@ -5,12 +5,10 @@
 set -e
 cd "$(dirname "$0")/../.."
 mkdir -p logs
+. scripts/hpc/submit_lib.sh
 export LOSS_ON="${LOSS_ON:-all}"
+JOB_ENV="LOSS_ON"  # written into the job scripts (bsub does not pass it on)
 
-submit() {  # prints the job id
-    bsub "$@" | sed -n 's/^Job <\([0-9]*\)>.*/\1/p'
-}
-
-j1=$(submit < scripts/hpc/08_token_seeds.lsf)
-j2=$(submit -w "ended($j1)" < scripts/hpc/09_token_seeds_eval.lsf)
+j1=$(submit scripts/hpc/08_token_seeds.lsf)
+j2=$(submit scripts/hpc/09_token_seeds_eval.lsf -w "ended($j1)")
 echo "token seeds: $j1 (array)   evaluate: $j2   (loss on $LOSS_ON)"

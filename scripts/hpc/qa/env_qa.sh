@@ -8,10 +8,11 @@
 LOSS_ON=response
 UV_SYNC="${UV_SYNC:-0}" . scripts/hpc/env.sh
 
-export SIZE="${SIZE:-135M}"
-case "$SIZE" in
-    135M|360M) ;;
-    *) echo "SIZE must be 135M or 360M, got '$SIZE'"; exit 1 ;;
+# No default: submit_qa.sh writes SIZE into each job. A job without it would
+# otherwise run the wrong model and overwrite the other size's files.
+case "${SIZE:-}" in
+    135M|360M) export SIZE ;;
+    *) echo "SIZE must be 135M or 360M, got '${SIZE:-}' (submit with scripts/hpc/qa/submit_qa.sh)"; exit 1 ;;
 esac
 export BASE_MODEL="HuggingFaceTB/SmolLM2-$SIZE"
 export TAG="qa_$SIZE"

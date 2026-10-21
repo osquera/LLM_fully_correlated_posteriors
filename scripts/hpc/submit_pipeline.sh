@@ -16,20 +16,18 @@ set -e
 cd "$(dirname "$0")/../.."
 mkdir -p logs
 
-# bsub hands the submitting environment to the job, so env.sh sees these
+# written into every job script (bsub does not pass the environment on)
+. scripts/hpc/submit_lib.sh
 export LOSS_ON="${LOSS_ON:-all}"
+JOB_ENV="LOSS_ON"
 [ "$LOSS_ON" = "response" ] && adapter=checkpoints/smollm2_lora_response || adapter=checkpoints/smollm2_lora
-
-submit() {  # prints the job id
-    bsub "$@" | sed -n 's/^Job <\([0-9]*\)>.*/\1/p'
-}
 
 if [ "${SKIP_FINETUNE:-0}" = "1" ]; then
     [ -d "$adapter" ] || { echo "no $adapter"; exit 1; }
     dep=""
     echo "skipping fine-tune, using $adapter"
 else
-    j1=$(submit < scripts/hpc/01_finetune.lsf)
+    j1=$(submit scripts/hpc/01_finetune.lsf)
     dep="-w done($j1)"
     echo "finetune: $j1 (loss on $LOSS_ON)"
 fi
@@ -41,20 +39,20 @@ waits=""
 if [ "${SKIP_SEQUENCE:-0}" = "1" ]; then
     echo "sequence: skipped"
 else
-    j2=$(submit $dep < scripts/hpc/02_sample_sequence.lsf)
+    j2=$(submit scripts/hpc/02_sample_sequence.lsf $dep)
     waits="done($j2)"
     echo "sequence: $j2"
 fi
 if [ "${SKIP_TOKEN:-0}" = "1" ]; then
     echo "token: skipped"
 else
-    j3=$(submit $dep < scripts/hpc/03_sample_token.lsf)
+    j3=$(submit scripts/hpc/03_sample_token.lsf $dep)
     # ended(), not done(), for the token job: evaluate whatever finished.
     waits="${waits:+$waits && }ended($j3)"
     echo "token: $j3"
 fi
 wait_for="$waits"
 
-j4=$(submit -w "$wait_for" < scripts/hpc/04_evaluate.lsf)
-j5=$(submit -w "$wait_for" < scripts/hpc/05_sweep_tolerance.lsf)
+j4=$(submit scripts/hpc/04_evaluate.lsf -w "$wait_for")
+j5=$(submit scripts/hpc/05_sweep_tolerance.lsf -w "$wait_for")
 echo "evaluate: $j4   sweep: $j5"

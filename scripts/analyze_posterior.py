@@ -63,6 +63,9 @@ def parse_args():
     ap.add_argument("--test-split", default="train[2000:2256]")
     ap.add_argument("--near-ood", nargs="+", default=list(NEAR_OOD), choices=list(NEAR_OOD))
     ap.add_argument("--n-eval", type=int, default=256)
+    ap.add_argument("--score-on", choices=["all", "response"], default=None,
+                    help="tokens of the test and near-OOD sets to score (default: the "
+                         "constrained ones); 'response' leaves out the shared template")
     ap.add_argument("--max-unconstrained", type=int, default=None,
                     help="cap on the never-projected train sequences (default: all)")
     ap.add_argument("--n-bins", type=int, default=10)
@@ -177,6 +180,7 @@ def main():
     blobs = {p: torch.load(p, weights_only=False) for p in files}
     sargs = next(iter(blobs.values()))["args"]
     loss_on = sargs.get("loss_on", "all")
+    score_on = args.score_on or loss_on  # test and near-OOD; train stays on loss_on
     tol = next(iter(blobs.values()))["info"]["alpha_tol_nats"]
 
     tokenizer = AutoTokenizer.from_pretrained(args.adapter)
@@ -197,7 +201,7 @@ def main():
     sets = {
         "train_constrained": encode(tokenizer, texts[:n], max_len, loss_on),
         "train_unconstrained": encode(tokenizer, unconstrained, max_len, loss_on),
-        "test": encode(tokenizer, test[: args.n_eval], max_len, loss_on),
+        "test": encode(tokenizer, test[: args.n_eval], max_len, score_on),
     }
     wiki = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
     sets["wikitext"] = encode(tokenizer, [t for t in wiki["text"] if len(t.split()) >= 64]
@@ -205,9 +209,9 @@ def main():
     for name in args.near_ood:
         path, cfg, split, row = NEAR_OOD[name]
         d = load_dataset(path, cfg, split=split).shuffle(seed=0).select(range(args.n_eval))
-        sets[name] = encode(tokenizer, [alpaca_text(*row(r)) for r in d], max_len, loss_on)
+        sets[name] = encode(tokenizer, [alpaca_text(*row(r)) for r in d], max_len, score_on)
     print({k: (tuple(v["input_ids"].shape), int(v["loss_mask"].sum())) for k, v in sets.items()},
-          f"loss_on={loss_on}")
+          f"loss_on={loss_on} score_on={score_on}")
     near = [s for s in sets if s not in ("train_constrained", "train_unconstrained", "test")]
 
     methods = {"map": torch.zeros(1, space.P)}
@@ -230,7 +234,7 @@ def main():
             raw[name][sname] = {"metrics": metrics, "scores": scores, "seq_nll": seq_nll}
         print(f"evaluated {name}")
 
-    report = {"loss_on": loss_on, "tol_nats": tol, "methods": list(methods),
+    report = {"loss_on": loss_on, "score_on": score_on, "tol_nats": tol, "methods": list(methods),
               "sets": {k: int(v["input_ids"].shape[0]) for k, v in sets.items()},
               "mi_beyond_softmax": {}, "unconstrained_train": {}, "near_ood": {}}
     seq_ids = {s: seq_index(sets[s]) for s in sets}

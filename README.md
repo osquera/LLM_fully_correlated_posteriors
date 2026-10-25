@@ -111,6 +111,12 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
   samples are judged on the same answers, so the epistemic part has no
   sampling noise (exactly 0 for the MAP). Writes
   `figures/semantic_uncertainty_likelihood.{json,md}`.
+- `bsub < scripts/hpc/13_answer_only.lsf` re-scores the existing samples on
+  answer tokens only (`--score-on response` in `evaluate_posterior.py` and
+  `analyze_posterior.py`): the all-token posterior also constrains the Alpaca
+  template, which every test sequence shares, so scoring all tokens can make
+  OOD detection look better than it is. Train stays on the constrained tokens,
+  WikiText on all of them.
 - `scripts/plot_followups.py` plots `analysis.json` and the seed summary
   (`figures/followups.png`); `scripts/plot_constraints.py` compares sequence
   mode (256 / 1792 sequences) with token mode; `scripts/plot_semantic.py`

@@ -56,6 +56,10 @@ def parse_args():
     ap.add_argument("--ood-config", default="wikitext-2-raw-v1")
     ap.add_argument("--ood-split", default="test")
     ap.add_argument("--n-eval", type=int, default=256)
+    ap.add_argument("--score-on", choices=["all", "response"], default=None,
+                    help="tokens of the test set to score (default: the ones the posterior "
+                         "was constrained on). 'response' leaves out the prompt template, "
+                         "which every Alpaca sequence shares")
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--out", default="figures/posterior_eval.json")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -207,13 +211,15 @@ def build_sets(tokenizer, sargs, args):
     need test_split, n_eval and the ood_* fields."""
     # train: the very sequences behind J^L, taken from the sampler's own args
     max_len = sargs["max_length"]
-    # train and test score the tokens the projection constrained; WikiText has
-    # no response, so ood always scores every token
+    # train scores the tokens the projection constrained (Lemma 4.3); test those
+    # too unless --score-on says otherwise; WikiText has no response, so ood
+    # always scores every token
     loss_on = sargs.get("loss_on", "all")
+    score_on = getattr(args, "score_on", None) or loss_on
     train = load_texts(sargs["dataset"], sargs["split"], sargs["text_field"])
     train_enc = encode(tokenizer, train[: sargs["n_train"]], max_len, loss_on)
     test = load_texts(sargs["dataset"], args.test_split, sargs["text_field"])
-    test_enc = encode(tokenizer, test[: args.n_eval], max_len, loss_on)
+    test_enc = encode(tokenizer, test[: args.n_eval], max_len, score_on)
     ood_ds = load_dataset(args.ood_dataset, args.ood_config, split=args.ood_split)
     ood_field = "text" if "text" in ood_ds.column_names else ood_ds.column_names[0]
     # WikiText has many short lines; keep the long ones so the sets are comparable

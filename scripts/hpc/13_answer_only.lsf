@@ -1,0 +1,28 @@
+#!/bin/sh
+# Is token mode's OOD detection just the prompt template? The all-token
+# posterior constrains the Alpaca template, which every test sequence shares,
+# so its MI there is ~0 and WikiText separates easily. Re-score the existing
+# samples on answer tokens only (--score-on response) for the test and
+# near-OOD sets; train stays on all tokens (Lemma 4.3), WikiText on all.
+# No re-projection; ~1.5 h. Submit after stage 2:
+#   bsub < scripts/hpc/13_answer_only.lsf
+#BSUB -J pb_answer_only
+#BSUB -q gpua100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_answer_only.out
+#BSUB -e logs/%J_answer_only.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/evaluate_posterior.py \
+    --samples "$SAMPLES_SEQ" "$SAMPLES_TOK" --adapter "$ADAPTER" \
+    --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+    --out "figures/posterior_eval_answer_only$SUF.json"
+uv run python scripts/analyze_posterior.py \
+    --samples "$SAMPLES_SEQ" "$SAMPLES_TOK" --adapter "$ADAPTER" \
+    --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+    --out "figures/analysis_answer_only$SUF.json"

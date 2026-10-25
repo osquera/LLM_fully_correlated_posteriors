@@ -9,6 +9,7 @@
 #        response only:     LOSS_ON=response sh scripts/hpc/submit_pipeline.sh
 #        no token mode:     SKIP_TOKEN=1 sh scripts/hpc/submit_pipeline.sh  (~22 h saved)
 #        token mode only:   SKIP_SEQUENCE=1 sh scripts/hpc/submit_pipeline.sh
+#        another queue:     QUEUE=gpuh100 sh scripts/hpc/submit_pipeline.sh
 # The variables combine. LOSS_ON=response writes *_response outputs, leaving
 # the default run's alone (see env.sh).
 # Watch with `bstat`, `bpeek <jobid>`; kill with `bkill <jobid>`.

@@ -25,13 +25,13 @@ if [ "${SKIP_FINETUNE:-0}" = "1" ]; then
     dep=""
     echo "skipping fine-tune"
 else
-    j1=$(submit scripts/hpc/qa/01_finetune.lsf -q "$QUEUE")
+    j1=$(submit scripts/hpc/qa/01_finetune.lsf)
     dep="-w done($j1)"
     echo "finetune: $j1"
 fi
 # parts of an earlier run would be merged too
 rm -f "samples/parts_qa_$SIZE"/part*.pt
-j2=$(submit scripts/hpc/qa/02_sample_part.lsf -q "$QUEUE" $dep -J "pb_qa_part[1-$PARTS]")
+j2=$(submit scripts/hpc/qa/02_sample_part.lsf $dep -J "pb_qa_part[1-$PARTS]")
 # ended(), not done(): merge whatever parts finished
-j3=$(submit scripts/hpc/qa/03_merge_eval.lsf -q "$QUEUE" -w "ended($j2)")
+j3=$(submit scripts/hpc/qa/03_merge_eval.lsf -w "ended($j2)")
 echo "parts: $j2 (array of $PARTS)   merge + evaluate: $j3   (SIZE=$SIZE, queue $QUEUE)"

@@ -286,17 +286,23 @@ def main():
             g: dnll_summary(raw[name][g]["seq_nll"], raw["map"][g]["seq_nll"][0], tol)
             for g in ("train_constrained", "train_unconstrained")}
 
-    # 3. near-OOD
+    # 3. near-OOD. Sequences with no scored token (an answer cut off by
+    # max_length, common in Dolly under --score-on response) have no score;
+    # left in, their 0 would count as maximally in-distribution
+    scored = {s: sets[s]["loss_mask"][:, 1:].sum(1) > 0 for s in sets}
     for name in methods:
         r = {}
         t = raw[name]["test"]
+        ts = {k: t["scores"][k][scored["test"]] for k in ("entropy", "mi")}
         for s in near:
             o = raw[name][s]
+            os_ = {k: o["scores"][k][scored[s]] for k in ("entropy", "mi")}
             r[s] = {"nll_bma": o["metrics"]["nll_bma"], "acc": o["metrics"]["acc"],
                     "mi": o["metrics"]["mi"], "entropy": o["metrics"]["entropy"],
-                    "auroc_entropy": auroc(t["scores"]["entropy"], o["scores"]["entropy"])}
+                    "n_scored": int(scored[s].sum()),
+                    "auroc_entropy": auroc(ts["entropy"], os_["entropy"])}
             if name != "map":
-                r[s]["auroc_mi"] = auroc(t["scores"]["mi"], o["scores"]["mi"])
+                r[s]["auroc_mi"] = auroc(ts["mi"], os_["mi"])
         r["test"] = {k: t["metrics"][k] for k in ("nll_bma", "acc", "mi", "entropy")}
         report["near_ood"][name] = r
 

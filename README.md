@@ -6,6 +6,9 @@ to SmolLM2.
 
 Reference implementation (JAX/Flax): https://github.com/h-roy/projected-bayes
 
+
+Results so far, one entry per experiment with its numbers and conclusion: [EXPERIMENTS.md](EXPERIMENTS.md).
+
 ## Why the loss-projection variant, and not the main method
 
 The paper's headline method (§4) projects onto `ker(J_θ)` and needs a per-batch

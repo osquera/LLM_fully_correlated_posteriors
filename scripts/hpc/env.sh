@@ -62,10 +62,20 @@ case "$LOSS_ON" in
     response) SUF="_response" ;;
     *) echo "LOSS_ON must be all or response, got '$LOSS_ON'"; exit 1 ;;
 esac
+# Token-mode projection settings (03_sample_token.lsf). Non-default ones tag
+# the token samples and the figures, e.g. N_ITER=1500 writes
+# posterior_token_it1500.pt and posterior_eval_it1500.json, so runs with other
+# settings never overwrite the default run. VEC_BATCH / ROW_BATCH only trade
+# speed for memory (same result), so they are not part of the tag.
+export N_ITER="${N_ITER:-500}"
+export N_SAMPLES="${N_SAMPLES:-8}"
+TOK_TAG=""
+[ "$N_ITER" != 500 ] && TOK_TAG="${TOK_TAG}_it$N_ITER"
+[ "$N_SAMPLES" != 8 ] && TOK_TAG="${TOK_TAG}_s$N_SAMPLES"
 export ADAPTER="checkpoints/smollm2_lora$SUF"
 export SAMPLES_SEQ="samples/posterior_sequence$SUF.pt"
-export SAMPLES_TOK="samples/posterior_token$SUF.pt"
-export EVAL_OUT="figures/posterior_eval$SUF.json"
-export SWEEP_OUT="figures/tolerance_sweep$SUF"
-export SUF
-echo "LOSS_ON=$LOSS_ON  adapter=$ADAPTER"
+export SAMPLES_TOK="samples/posterior_token$SUF$TOK_TAG.pt"
+export EVAL_OUT="figures/posterior_eval$SUF$TOK_TAG.json"
+export SWEEP_OUT="figures/tolerance_sweep$SUF$TOK_TAG"
+export SUF TOK_TAG
+echo "LOSS_ON=$LOSS_ON  adapter=$ADAPTER  token: $N_SAMPLES samples x $N_ITER sweeps -> $SAMPLES_TOK"

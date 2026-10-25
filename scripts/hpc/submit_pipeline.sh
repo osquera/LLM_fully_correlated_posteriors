@@ -10,6 +10,9 @@
 #        no token mode:     SKIP_TOKEN=1 sh scripts/hpc/submit_pipeline.sh  (~22 h saved)
 #        token mode only:   SKIP_SEQUENCE=1 sh scripts/hpc/submit_pipeline.sh
 #        another queue:     QUEUE=gpuh100 sh scripts/hpc/submit_pipeline.sh
+#        token settings:    N_ITER=1500 N_SAMPLES=16 sh scripts/hpc/submit_pipeline.sh
+#                           (tagged outputs, e.g. posterior_token_it1500_s16.pt;
+#                            VEC_BATCH / ROW_BATCH lower memory, see env.sh)
 # The variables combine. LOSS_ON=response writes *_response outputs, leaving
 # the default run's alone (see env.sh).
 # Watch with `bstat`, `bpeek <jobid>`; kill with `bkill <jobid>`.
@@ -20,7 +23,7 @@ mkdir -p logs
 # written into every job script (bsub does not pass the environment on)
 . scripts/hpc/submit_lib.sh
 export LOSS_ON="${LOSS_ON:-all}"
-JOB_ENV="LOSS_ON"
+JOB_ENV="LOSS_ON N_ITER N_SAMPLES VEC_BATCH ROW_BATCH"
 [ "$LOSS_ON" = "response" ] && adapter=checkpoints/smollm2_lora_response || adapter=checkpoints/smollm2_lora
 
 if [ "${SKIP_FINETUNE:-0}" = "1" ]; then

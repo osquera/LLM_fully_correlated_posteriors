@@ -26,8 +26,10 @@ uv run python scripts/sample_posterior.py \
     --projector iterative \
     --n-train 256 \
     --proj-batch-size 8 \
-    --n-samples 8 \
-    --n-iterations 500 \
+    --n-samples "$N_SAMPLES" \
+    --n-iterations "$N_ITER" \
+    ${VEC_BATCH:+--vec-batch "$VEC_BATCH"} \
+    ${ROW_BATCH:+--row-batch "$ROW_BATCH"} \
     --tol 1e-3 \
     --alpha-tol 0.01 \
     --adapter "$ADAPTER" \

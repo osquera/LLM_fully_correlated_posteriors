@@ -117,6 +117,13 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
   template, which every test sequence shares, so scoring all tokens can make
   OOD detection look better than it is. Train stays on the constrained tokens,
   WikiText on all of them.
+- The alternating projection pushes many vectors through each JVP/VJP at
+  once (`torch.func.vmap`): all samples together (`--vec-batch`, default all)
+  and the rows of each batch's J J^T in chunks (`--row-batch`, default 16).
+  Same result as one at a time up to round-off (tested); lower either on
+  out-of-memory. `bsub < scripts/hpc/14_benchmark_projection.lsf` times both
+  against the one-at-a-time setting on the real model and extrapolates to a
+  full token-mode run.
 - `scripts/plot_followups.py` plots `analysis.json` and the seed summary
   (`figures/followups.png`); `scripts/plot_constraints.py` compares sequence
   mode (256 / 1792 sequences) with token mode; `scripts/plot_semantic.py`

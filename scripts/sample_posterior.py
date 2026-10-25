@@ -77,6 +77,10 @@ def parse_args():
     ap.add_argument("--tol", type=float, default=1e-3, help="early-stop kernel residual")
     ap.add_argument("--rtol", type=float, default=1e-6, help="relative eigenvalue cutoff")
     ap.add_argument("--no-acceleration", action="store_true")
+    ap.add_argument("--vec-batch", type=int, default=None,
+                    help="samples projected together (default: all); lower on out-of-memory")
+    ap.add_argument("--row-batch", type=int, default=16,
+                    help="rows of J J^T formed together in the precompute")
     ap.add_argument("--alpha-tol", type=float, default=0.01,
                     help="measured alpha: max |change in a sequence's mean NLL|, as a "
                          "fraction of the MAP's mean NLL over the projection rows")
@@ -160,6 +164,7 @@ def main():
             n_samples=args.n_samples, alpha=1.0,
             n_iterations=args.n_iterations, rtol=args.rtol,
             acceleration=not args.no_acceleration, tol=args.tol, seed=args.seed,
+            vec_batch=args.vec_batch, row_batch=args.row_batch,
         )
         # Hutchinson over the samples themselves; std sqrt(2 kdim / n_samples)
         kdim, n_probes = float(info["kernel_dim_est"]), args.n_samples

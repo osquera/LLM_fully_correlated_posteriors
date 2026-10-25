@@ -259,3 +259,68 @@ def test_converges_to_exact_projector():
     rel = float((v - exact).norm() / exact.norm())
     assert cos > 1 - 1e-6, f"wrong subspace: cos={cos}"
     assert rel < 1e-4, f"not converged to exact projector: rel err {rel:.3e}"
+
+
+def _reference_project(v, f, theta, space, batches, factors, n_iterations, tol, check_every=25):
+    """The one-vector-at-a-time algorithm as it was before batching, verbatim
+    apart from its helpers being inlined: the batched code must reproduce it."""
+    from torch.func import jvp, vjp
+
+    def residual(v):
+        num = sum(float((jvp(lambda p: f(p, b), (theta,), (space.unflatten(v),))[1] ** 2).sum())
+                  for b in batches)
+        return num ** 0.5 / float(v.norm())
+
+    for k in range(n_iterations):
+        v_start = v
+        for batch, factor in zip(batches, factors):
+            fb = lambda p: f(p, batch)  # noqa: E731
+            _, jv = jvp(fb, (theta,), (space.unflatten(v),))
+            w = factor.eigvecs @ (factor.inv_eigvals * (factor.eigvecs.T @ jv))
+            _, vjp_fn = vjp(fb, theta)
+            v = v - space.flatten(vjp_fn(w)[0])
+        d = v_start - v
+        dd = d @ d
+        if dd > 0:
+            t = (v_start @ d) / dd
+            v = t * v + (1.0 - t) * v_start
+        if tol is not None and (k + 1) % check_every == 0 and residual(v) < tol:
+            break
+    return v
+
+
+def test_batched_projection_matches_one_vector_at_a_time():
+    from llmproj.projection import _jjt, kernel_residuals, project_vectors
+    _, space, theta, f, batches = _toy()
+    # J J^T: vmapped rows in chunks == one row at a time
+    fb = lambda p: f(p, batches[0])  # noqa: E731
+    R = int(fb(theta).numel())
+    assert torch.allclose(_jjt(fb, theta, space, R, row_batch=3),
+                          _jjt(fb, theta, space, R, row_batch=1), rtol=1e-12, atol=1e-12)
+
+    factors = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    gen = torch.Generator().manual_seed(0)
+    V = torch.randn(3, space.P, generator=gen, dtype=torch.float64)
+    # a loose tol so the rows stop at different sweeps: the per-row early stop
+    # must then match too
+    for tol in (None, 3e-2):
+        ref = torch.stack([_reference_project(v.clone(), f, theta, space, batches, factors,
+                                              n_iterations=100, tol=tol) for v in V])
+        out = project_vectors(V, f, theta, space, batches, factors, n_iterations=100, tol=tol)
+        # equal up to round-off (batched matmuls sum in another order, and the
+        # acceleration step amplifies it a little): ~1e-10 here, in float64
+        assert torch.allclose(out, ref, rtol=1e-7, atol=1e-8), float((out - ref).abs().max())
+    res = kernel_residuals(out, f, theta, space, batches)
+    assert torch.allclose(res, torch.tensor([kernel_residual(v, f, theta, space, batches)
+                                             for v in out], dtype=res.dtype))
+
+
+def test_sampler_result_does_not_depend_on_vec_batch():
+    _, space, theta, f, batches = _toy()
+    factors = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    kw = dict(n_samples=4, alpha=1.0, n_iterations=60, tol=None, seed=3, factors=factors,
+              progress=False)
+    d_all, info_all = sample_projected_posterior(f, theta, space, batches, **kw)
+    d_one, info_one = sample_projected_posterior(f, theta, space, batches, vec_batch=1, **kw)
+    assert torch.allclose(d_all, d_one, rtol=1e-7, atol=1e-8), float((d_all - d_one).abs().max())
+    assert abs(info_all["kernel_dim_est"] - info_one["kernel_dim_est"]) < 1e-6

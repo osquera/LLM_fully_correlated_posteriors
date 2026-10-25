@@ -1,0 +1,20 @@
+#!/bin/sh
+# Time the token-mode projection, one-at-a-time vs batched (vmap over rows of
+# J J^T and over samples), on 2 of the 32 batches, and extrapolate to a full
+# run. Read-only: writes nothing but the log. ~20-40 min.
+#   bsub < scripts/hpc/14_benchmark_projection.lsf        (H100)
+#   bsub -q gpua100 < scripts/hpc/14_benchmark_projection.lsf
+#BSUB -J pb_bench
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 2:00
+#BSUB -o logs/%J_bench.out
+#BSUB -e logs/%J_bench.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/benchmark_projection.py --adapter "$ADAPTER" \
+    --proj-batch-size 8 --n-batches 2 --row-batch 1 16 64 --vec-batch 1 8 --repeats 2

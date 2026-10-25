@@ -1,0 +1,35 @@
+#!/bin/sh
+# Can the exact kernel projection be replaced by removing only the top-k
+# directions of J^L (what would scale to pretraining data)? One subspace
+# iteration for k = 2048 (scripts/sample_topk_posterior.py), samples for
+# k = 16 ... 2048 on the same noise as the exact token-mode posterior, then
+# the answer-token analysis next to the exact projected and isotropic
+# posteriors, at each method's own alpha and at one matched sample norm.
+# ~5 h on an H100. Needs samples/posterior_token.pt.
+#   bsub < scripts/hpc/17_topk.lsf
+#BSUB -J pb_topk
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_topk.out
+#BSUB -e logs/%J_topk.err
+
+. scripts/hpc/env.sh
+
+KS="16 64 256 1024 2048"
+topk="samples/posterior_topk$SUF.pt"
+[ -f "$topk" ] || uv run python scripts/sample_topk_posterior.py --adapter "$ADAPTER" \
+    --n-train 256 --proj-batch-size 8 --ks $KS --n-iter 3 --vec-batch 16 \
+    --n-samples 8 --alpha-tol 0.01 --out "$topk"
+
+methods="token/projected_measured token/isotropic_measured"
+for k in $KS; do methods="$methods token/topk${k}_measured"; done
+for norm in "" 8.25; do
+    uv run python scripts/analyze_posterior.py --samples "$SAMPLES_TOK" "$topk" \
+        --adapter "$ADAPTER" --methods $methods \
+        --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+        ${norm:+--norm "$norm"} --out "figures/analysis_topk$SUF${norm:+_norm$norm}.json"
+done

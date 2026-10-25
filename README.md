@@ -137,6 +137,12 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
   (`--unconstrained-start 1024`), at their own alpha and rescaled to one sample
   norm (`--norm`), since the measured alpha shrinks the samples as the worst
   case is taken over more sequences.
+- `bsub < scripts/hpc/17_topk.lsf`: remove only the top-k directions of J^L
+  (`llmproj.lowrank`, randomized subspace iteration with the batched
+  JVP/VJPs) instead of projecting onto its whole kernel, for k = 16 ... 2048
+  (`scripts/sample_topk_posterior.py`), and compare with the exact and
+  isotropic posteriors on the same noise. Also reports J^L's spectrum: the
+  share of its energy in the top k directions.
 - `scripts/plot_followups.py` plots `analysis.json` and the seed summary
   (`figures/followups.png`); `scripts/plot_constraints.py` compares sequence
   mode (256 / 1792 sequences) with token mode; `scripts/plot_semantic.py`

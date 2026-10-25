@@ -324,3 +324,32 @@ def test_sampler_result_does_not_depend_on_vec_batch():
     d_one, info_one = sample_projected_posterior(f, theta, space, batches, vec_batch=1, **kw)
     assert torch.allclose(d_all, d_one, rtol=1e-7, atol=1e-8), float((d_all - d_one).abs().max())
     assert abs(info_all["kernel_dim_est"] - info_one["kernel_dim_est"]) < 1e-6
+
+
+def _dense_jacobian(f, theta, space, batches):
+    from torch.func import jacrev
+    rows = []
+    for b in batches:
+        jac = jacrev(lambda th: f(th, b))(theta)
+        rows.append(torch.cat([jac[n].reshape(jac[n].shape[0], -1) for n in space.names], 1))
+    return torch.cat(rows)
+
+
+def test_top_singular_subspace_matches_dense_svd():
+    from llmproj.lowrank import project_out, top_singular_subspace
+    _, space, theta, f, batches = _toy()
+    J = _dense_jacobian(f, theta, space, batches)  # (40, 131), rank 40
+    s = torch.linalg.svdvals(J)
+    out = top_singular_subspace(f, theta, space, batches, k=8, n_iter=6, vec_batch=5,
+                                progress=False)
+    # leading Ritz values = squared top singular values
+    assert torch.allclose(out["sigma2"][:4].double(), s[:4] ** 2, rtol=1e-4)
+    # unbiased Frobenius estimate, from only 8 probes: within ~3 std
+    assert abs(out["frob2_est"] / float((J ** 2).sum()) - 1) < 1.5
+    # k >= rank: the subspace is the whole row space, so projecting it out is
+    # the exact kernel projection
+    full = top_singular_subspace(f, theta, space, batches, k=40, n_iter=2, progress=False)
+    eps = torch.randn(3, space.P, dtype=torch.float64)
+    Vh = torch.linalg.svd(J, full_matrices=False).Vh
+    exact = eps - (eps @ Vh.T) @ Vh
+    assert torch.allclose(project_out(eps, full["U"]), exact, atol=1e-8)

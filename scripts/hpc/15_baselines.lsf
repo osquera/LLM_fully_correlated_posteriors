@@ -1,0 +1,45 @@
+#!/bin/sh
+# Baselines for the posterior's OOD / error scores, all scored like
+# 13_answer_only.lsf (answer tokens of test and near-OOD, all of WikiText):
+#   - LoRA ensemble: 8 adapters fine-tuned exactly like theta_map with seeds
+#     1-8 (the deep-ensemble reference), and DropConnect (p = 0.1) on the
+#     LoRA weights, both evaluated with analyze_posterior.py next to the
+#     token-mode projected and isotropic posteriors;
+#   - single-pass scores from theta_map's hidden states: Mahalanobis and
+#     k-NN distance at the middle and last layer (baselines_single_pass.py).
+# ~1.5 h on an H100 (the 8 fine-tunes ~12 min). Needs samples/posterior_token.pt.
+#   bsub < scripts/hpc/15_baselines.lsf
+#BSUB -J pb_baselines
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_baselines.out
+#BSUB -e logs/%J_baselines.err
+
+. scripts/hpc/env.sh
+
+members=""
+for s in 1 2 3 4 5 6 7 8; do
+    out="checkpoints/smollm2_lora${SUF}_ens$s"
+    [ -f "$out/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --split "train[:2000]" --batch-size 16 \
+        --epochs 3 --loss-on "$LOSS_ON" --seed "$s" --out "$out"
+    members="$members $out"
+done
+
+uv run python scripts/build_baseline_samples.py --adapter "$ADAPTER" --members $members \
+    --like "$SAMPLES_TOK" --dropconnect-p 0.1 --out "samples/baselines$SUF.pt"
+
+uv run python scripts/analyze_posterior.py \
+    --samples "$SAMPLES_TOK" "samples/baselines$SUF.pt" --adapter "$ADAPTER" \
+    --methods token/projected_measured token/isotropic_measured \
+              baseline/lora_ensemble baseline/dropconnect_p0.1 \
+    --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+    --out "figures/analysis_baselines$SUF.json"
+
+uv run python scripts/baselines_single_pass.py --like "$SAMPLES_TOK" --adapter "$ADAPTER" \
+    --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+    --out "figures/baselines_single_pass$SUF.json"

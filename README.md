@@ -124,6 +124,19 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
   out-of-memory. `bsub < scripts/hpc/14_benchmark_projection.lsf` times both
   against the one-at-a-time setting on the real model and extrapolates to a
   full token-mode run.
+- `bsub < scripts/hpc/15_baselines.lsf`: non-posterior baselines on the same
+  answer-token sets. A LoRA ensemble (8 fine-tunes with seeds 1-8) and
+  DropConnect on the LoRA weights become a samples file
+  (`scripts/build_baseline_samples.py`) that `analyze_posterior.py` scores
+  next to the token-mode posteriors; `scripts/baselines_single_pass.py` scores
+  Mahalanobis and k-NN distances of theta_map's hidden states (middle and last
+  layer) on the same tokens. Writes `figures/analysis_baselines.json` and
+  `figures/baselines_single_pass.json`.
+- `bsub < scripts/hpc/16_scaling.lsf`: token-mode posteriors constrained on 64
+  to 1024 sequences, all analysed on the same never-projected sequences
+  (`--unconstrained-start 1024`), at their own alpha and rescaled to one sample
+  norm (`--norm`), since the measured alpha shrinks the samples as the worst
+  case is taken over more sequences.
 - `scripts/plot_followups.py` plots `analysis.json` and the seed summary
   (`figures/followups.png`); `scripts/plot_constraints.py` compares sequence
   mode (256 / 1792 sequences) with token mode; `scripts/plot_semantic.py`

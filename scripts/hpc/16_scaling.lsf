@@ -1,0 +1,40 @@
+#!/bin/sh
+# How many constrained sequences does the token-mode posterior need? One array
+# element per n_train in 64 128 256 512 1024: project (8 samples x 500
+# sweeps; 256 reuses $SAMPLES_TOK), then analyse on answer tokens with the
+# same never-projected sequences for every n (train[1024:2000]), so the
+# Lemma 4.3 hold-out and the OOD AUROCs form one curve.
+# H100, batched projection: ~1 h (64) to ~16 h (1024).
+#   bsub < scripts/hpc/16_scaling.lsf
+#BSUB -J pb_scale[1-5]
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_%I_scale.out
+#BSUB -e logs/%J_%I_scale.err
+
+. scripts/hpc/env.sh
+
+N=$(echo 64 128 256 512 1024 | cut -d' ' -f"$LSB_JOBINDEX")
+if [ "$N" = 256 ]; then
+    samples="$SAMPLES_TOK"
+else
+    samples="samples/posterior_token${SUF}_n$N.pt"
+    [ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+        --loss-mode token --projector iterative --n-train "$N" --proj-batch-size 8 \
+        --n-samples 8 --n-iterations 500 --tol 1e-3 --alpha-tol 0.01 \
+        --adapter "$ADAPTER" --out "$samples"
+fi
+# at the run's own measured alpha, and rescaled to the 256-sequence run's
+# sample norm: the measured alpha takes the worst of more sequences as n grows,
+# which shrinks the samples by itself, so only the matched-norm curve isolates
+# what the extra constraints do
+for norm in "" 8.25; do
+    uv run python scripts/analyze_posterior.py --samples "$samples" --adapter "$ADAPTER" \
+        --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+        --unconstrained-start 1024 ${norm:+--norm "$norm"} \
+        --out "figures/analysis_scaling${SUF}_n$N${norm:+_norm$norm}.json"
+done

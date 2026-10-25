@@ -66,6 +66,12 @@ def parse_args():
     ap.add_argument("--score-on", choices=["all", "response"], default=None,
                     help="tokens of the test and near-OOD sets to score (default: the "
                          "constrained ones); 'response' leaves out the shared template")
+    ap.add_argument("--norm", type=float, default=None,
+                    help="rescale every method to this mean sample norm ||delta|| (the "
+                         "projection does not depend on alpha), for a matched-size comparison")
+    ap.add_argument("--unconstrained-start", type=int, default=None,
+                    help="first never-projected training sequence (default: n_train); fix it "
+                         "to compare runs with different n_train on the same sequences")
     ap.add_argument("--max-unconstrained", type=int, default=None,
                     help="cap on the never-projected train sequences (default: all)")
     ap.add_argument("--n-bins", type=int, default=10)
@@ -172,6 +178,36 @@ def seq_index(enc):
     return torch.arange(valid.shape[0])[:, None].expand_as(valid)[valid]
 
 
+def build_analysis_sets(tokenizer, sargs, args, loss_on, score_on):
+    """The training sequences behind the projection (scored on ``loss_on``
+    tokens), the rest of the fine-tuning split, the test set and the near-OOD
+    sets (on ``score_on`` tokens), and WikiText (all tokens). ``args`` needs
+    test_split, n_eval, near_ood and max_unconstrained."""
+    max_len = sargs["max_length"]
+    texts = load_texts(sargs["dataset"], sargs["split"], sargs["text_field"])
+    n = sargs["n_train"]
+    start = getattr(args, "unconstrained_start", None) or n
+    if start < n:
+        raise SystemExit(f"--unconstrained-start {start} is inside the {n} constrained sequences")
+    unconstrained = texts[start:][: args.max_unconstrained]
+    test = load_texts(sargs["dataset"], args.test_split, sargs["text_field"])
+    sets = {
+        "train_constrained": encode(tokenizer, texts[:n], max_len, loss_on),
+        "train_unconstrained": encode(tokenizer, unconstrained, max_len, loss_on),
+        "test": encode(tokenizer, test[: args.n_eval], max_len, score_on),
+    }
+    wiki = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    sets["wikitext"] = encode(tokenizer, [t for t in wiki["text"] if len(t.split()) >= 64]
+                              [: args.n_eval], max_len, "all")
+    for name in args.near_ood:
+        path, cfg, split, row = NEAR_OOD[name]
+        d = load_dataset(path, cfg, split=split).shuffle(seed=0).select(range(args.n_eval))
+        sets[name] = encode(tokenizer, [alpaca_text(*row(r)) for r in d], max_len, score_on)
+    print({k: (tuple(v["input_ids"].shape), int(v["loss_mask"].sum())) for k, v in sets.items()},
+          f"loss_on={loss_on} score_on={score_on}")
+    return sets
+
+
 def main():
     args = parse_args()
     files = [Path(p) for p in args.samples if Path(p).exists()]
@@ -193,25 +229,7 @@ def main():
     theta, frozen = space.theta(model), space.frozen(model)
 
     # --- sets
-    max_len = sargs["max_length"]
-    texts = load_texts(sargs["dataset"], sargs["split"], sargs["text_field"])
-    n = sargs["n_train"]
-    unconstrained = texts[n:][: args.max_unconstrained]
-    test = load_texts(sargs["dataset"], args.test_split, sargs["text_field"])
-    sets = {
-        "train_constrained": encode(tokenizer, texts[:n], max_len, loss_on),
-        "train_unconstrained": encode(tokenizer, unconstrained, max_len, loss_on),
-        "test": encode(tokenizer, test[: args.n_eval], max_len, score_on),
-    }
-    wiki = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-    sets["wikitext"] = encode(tokenizer, [t for t in wiki["text"] if len(t.split()) >= 64]
-                              [: args.n_eval], max_len, "all")
-    for name in args.near_ood:
-        path, cfg, split, row = NEAR_OOD[name]
-        d = load_dataset(path, cfg, split=split).shuffle(seed=0).select(range(args.n_eval))
-        sets[name] = encode(tokenizer, [alpaca_text(*row(r)) for r in d], max_len, score_on)
-    print({k: (tuple(v["input_ids"].shape), int(v["loss_mask"].sum())) for k, v in sets.items()},
-          f"loss_on={loss_on} score_on={score_on}")
+    sets = build_analysis_sets(tokenizer, sargs, args, loss_on, score_on)
     near = [s for s in sets if s not in ("train_constrained", "train_unconstrained", "test")]
 
     methods = {"map": torch.zeros(1, space.P)}
@@ -222,6 +240,8 @@ def main():
             if (args.methods and key not in args.methods and m not in args.methods) or \
                (not args.methods and not m.endswith("_measured")):
                 continue
+            if args.norm and float(d.norm(dim=1).mean()) > 0:
+                d = d * (args.norm / float(d.norm(dim=1).mean()))
             methods[key] = d
 
     # --- evaluate everything once
@@ -234,7 +254,7 @@ def main():
             raw[name][sname] = {"metrics": metrics, "scores": scores, "seq_nll": seq_nll}
         print(f"evaluated {name}")
 
-    report = {"loss_on": loss_on, "score_on": score_on, "tol_nats": tol, "methods": list(methods),
+    report = {"loss_on": loss_on, "score_on": score_on, "norm": args.norm, "tol_nats": tol, "methods": list(methods),
               "sets": {k: int(v["input_ids"].shape[0]) for k, v in sets.items()},
               "mi_beyond_softmax": {}, "unconstrained_train": {}, "near_ood": {}}
     seq_ids = {s: seq_index(sets[s]) for s in sets}

@@ -46,8 +46,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    3 posterior seeds in E18). It beats every
    other sampling method, including an 8-member LoRA ensemble (E14).
 3. **But a single-pass hidden-state k-NN beats it at that** (WikiText 0.94,
-   CodeAlpaca 0.89, GSM8K 0.90, Spanish 0.96; E14). As a pure input-novelty
-   detector the posterior does not pay for its 8 forward passes.
+   CodeAlpaca 0.89, GSM8K 0.90, Spanish 0.96; E14), also when its bank holds
+   only the posterior's 256 sequences (E20). As a pure input-novelty detector
+   the posterior does not pay for its 8 forward passes. It is not redundant,
+   though: MI and k-NN distance are nearly uncorrelated (rho 0.1-0.2), MI
+   still separates WikiText / GSM8K / Spanish within k-NN quintiles
+   (0.81 / 0.66 / 0.76), and their sum edges past k-NN on those sets (E20).
 4. **No help for errors or ambiguity.** MI adds nothing beyond the MAP's
    confidence for wrong tokens (E03, E11), and semantic MI only mirrors the
    answer spread (E09). Ambiguity was undetectable at 135M and 360M (E07, E10).
@@ -390,6 +394,41 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   500 sweeps only cost ~2% of sample size (the measured alpha absorbs it).
   Does not settle the larger runs: at n = 1024 the residual was 0.093 (E15),
   5x this one, so those may still want more sweeps.
+
+## E20 k-NN vs posterior MI: fair data, complementarity
+
+- **Date / job.** 2026-10-26; `20_knn_vs_mi.lsf` (7e6ae93, H100, 33 min).
+  `baselines_single_pass.py` with the token posterior's (seed 0) per-sequence
+  MI; answer tokens; hidden-state distances fitted on all 2000 fine-tuning
+  sequences (208k tokens, k-NN bank 50k of them, as E14) or on the
+  projection's 256 only (25.7k tokens).
+- **Results.** k-NN layer 15, bank from 2000 / 256 sequences: WikiText
+  0.938 / 0.933, Dolly 0.750 / 0.750, CodeAlpaca 0.888 / 0.872, GSM8K
+  0.895 / 0.906, Spanish 0.957 / 0.954 (Mahalanobis similar, within 0.02).
+
+  MI vs k-NN layer 15 (bank from 2000 sequences):
+
+  | set | MI alone | k-NN alone | MI within k-NN quintiles | z(log MI) + z(k-NN) |
+  |---|---|---|---|---|
+  | WikiText | 0.867 | 0.938 | **0.814** | **0.949** |
+  | Dolly | 0.562 | 0.750 | 0.519 | 0.675 |
+  | CodeAlpaca | 0.496 | 0.888 | 0.473 | 0.818 |
+  | GSM8K | 0.819 | 0.895 | **0.663** | 0.898 |
+  | Spanish | 0.819 | 0.957 | **0.758** | **0.965** |
+
+  (bank from 256: MI within quintiles 0.79 / 0.53 / 0.49 / 0.71 / 0.76.)
+  Per-sequence Spearman rho(MI, k-NN) within a set 0.06-0.22 (CodeAlpaca
+  -0.17), rho(MI, MAP entropy) 0.26-0.73, rho(k-NN, entropy) -0.29-0.23.
+  Against the last-layer distances MI is the stronger score on GSM8K and
+  WikiText (k-NN L30 0.18 / 0.83, MI within its quintiles 0.68 / 0.90).
+- **Showed.** k-NN's win is not a data advantage: 8x less bank data costs it
+  <= 0.02. But the two scores measure different things: they are nearly
+  uncorrelated per sequence, and MI keeps most of its separation among
+  sequences equally far from training on the three sets where it works.
+  An unweighted sum improves on k-NN there (+0.01) and hurts where MI is at
+  chance (Dolly -0.08, CodeAlpaca -0.07), so the combination is not a free
+  win. Correction to an earlier guess: within a set MI tracks the MAP's
+  entropy (and the gradient-curvature product), not input distance.
 
 ---
 

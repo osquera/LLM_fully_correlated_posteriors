@@ -8,7 +8,15 @@ each of --layers:
                scored token of the fine-tuning split (shrunk covariance)
   knn          1 - cosine similarity to the k-th nearest of a sample of those
                training tokens (deep k-NN)
-and the MAP's own entropy and 1 - confidence for reference.
+and the MAP's own entropy and 1 - confidence for reference. --fit-on
+constrained fits them on the projection's 256 sequences only (the posterior's
+data) instead of the whole fine-tuning split.
+
+With --samples, also: is a posterior's per-sequence MI complementary to the
+hidden-state scores? Per OOD set and hidden-state score:
+  mi_within   AUROC of MI within quintiles of the hidden-state score (does
+              MI separate test from OOD among equally distant sequences)
+  combined    AUROC of z(log MI) + z(score), standardised on the test set
 
 Reports, like analyze_posterior.py:
   ood    AUROC of the per-sequence mean score, test vs each OOD set
@@ -29,7 +37,8 @@ from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from analyze_posterior import NEAR_OOD, build_analysis_sets, seq_index, stratified_auroc
-from evaluate_posterior import auroc
+from evaluate_posterior import auroc, evaluate_set
+from llmproj.paramspace import ParamSpace
 
 
 def parse_args():
@@ -45,6 +54,10 @@ def parse_args():
     ap.add_argument("--score-on", choices=["all", "response"], default=None)
     ap.add_argument("--layers", type=int, nargs="+", default=None,
                     help="hidden-state indices (0 = embeddings; default: middle and last)")
+    ap.add_argument("--fit-on", choices=["all", "constrained"], default="all",
+                    help="training tokens the distances are fitted on")
+    ap.add_argument("--samples", default=None, help="posterior samples file for the MI comparison")
+    ap.add_argument("--method", default="token/projected_measured")
     ap.add_argument("--knn-k", type=int, default=10)
     ap.add_argument("--knn-train-tokens", type=int, default=50_000)
     ap.add_argument("--shrinkage", type=float, default=1e-3, help="x mean variance, on Sigma")
@@ -115,6 +128,46 @@ def seq_mean(score: torch.Tensor, enc) -> torch.Tensor:
     return tot[keep] / cnt[keep]
 
 
+def posterior_seq_mi(model, args, sets, eval_sets):
+    """Per-sequence mean MI of ``args.method``'s samples, scored sequences only
+    (the order seq_mean returns)."""
+    blob = torch.load(args.samples, weights_only=False)
+    mode, m = args.method.split("/")
+    if blob["info"]["loss_mode"] != mode:
+        raise SystemExit(f"{args.samples} is {blob['info']['loss_mode']}-mode, not {mode}")
+    deltas = blob["methods"][m].float()
+    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"], trainable_only=False)
+    theta, frozen = space.theta(model), space.frozen(model)
+    out = {}
+    for s in eval_sets:
+        _, sc, _ = evaluate_set(model, frozen, theta, space, deltas, sets[s], args.device, args.batch_size)
+        out[s] = sc["mi"][sets[s]["loss_mask"][:, 1:].sum(1) > 0]
+    return out
+
+
+def combine(seq, mi, oods, scores, n_bins=5):
+    """Test vs each OOD set: MI and a hidden-state score alone, MI within
+    quantile bins of the score, and their sum standardised on the test set."""
+    def z(x, ref):
+        return (x - ref.mean()) / ref.std().clamp_min(1e-12)
+    lmi = {s: v.clamp_min(1e-12).log() for s, v in mi.items()}
+    res = {}
+    for name in scores:
+        res[name] = {}
+        for s in oods:
+            t, o = seq["test"][name], seq[s][name]
+            y = torch.cat([torch.zeros(len(t), dtype=torch.bool), torch.ones(len(o), dtype=torch.bool)])
+            both = torch.cat([z(lmi["test"], lmi["test"]) + z(t, t), z(lmi[s], lmi["test"]) + z(o, t)])
+            res[name][s] = {
+                "mi": auroc(mi["test"], mi[s]),
+                "score": auroc(t, o),
+                "mi_within": stratified_auroc(y, torch.cat([mi["test"], mi[s]]), torch.cat([t, o]),
+                                              n_bins)["weighted"],
+                "combined": auroc(both[~y], both[y]),
+            }
+    return res
+
+
 def main():
     args = parse_args()
     sargs = torch.load(args.like, weights_only=False)["args"]
@@ -137,9 +190,10 @@ def main():
         print(f"features {name}: {next(iter(feats[name].values())).shape[0]} tokens")
 
     train = ("train_constrained", "train_unconstrained")
+    fit = train if args.fit_on == "all" else ("train_constrained",)
     scorers = {}
     for l in layers:
-        X = torch.cat([feats[s][l] for s in train])
+        X = torch.cat([feats[s][l] for s in fit])
         scorers[f"mahalanobis_L{l}"] = (l, Mahalanobis(X, args.shrinkage, args.device))
         scorers[f"knn_L{l}"] = (l, KNN(X, args.knn_k, args.knn_train_tokens, args.device))
 
@@ -151,10 +205,20 @@ def main():
             tok[s][name] = fn(feats[s][l])
 
     oods = [s for s in eval_sets if s != "test"]
-    report = {"loss_on": loss_on, "score_on": score_on, "layers": layers, "ood": {}, "error": {}}
+    report = {"loss_on": loss_on, "score_on": score_on, "fit_on": args.fit_on,
+              "n_fit_tokens": int(sum(feats[s][layers[0]].shape[0] for s in fit)),
+              "layers": layers, "ood": {}, "error": {}}
+    seq = {s: {score: seq_mean(v, sets[s]) for score, v in tok[s].items()} for s in eval_sets}
     for score in tok["test"]:
-        base_seq = seq_mean(tok["test"][score], sets["test"])
-        report["ood"][score] = {s: auroc(base_seq, seq_mean(tok[s][score], sets[s])) for s in oods}
+        report["ood"][score] = {s: auroc(seq["test"][score], seq[s][score]) for s in oods}
+
+    if args.samples:
+        mi = posterior_seq_mi(model, args, sets, eval_sets)
+        report["mi_method"] = args.method
+        report["combine"] = combine(seq, mi, oods, [n for n in scorers])
+        for s in eval_sets:
+            seq[s]["mi"] = mi[s]
+    report["seq_scores"] = {s: {k: v.tolist() for k, v in d.items()} for s, d in seq.items()}
 
     near = [s for s in oods if s != "wikitext"]
     for scope, group in (("test", ["test"]), ("test+wikitext", ["test", "wikitext"]),
@@ -176,6 +240,14 @@ def main():
     print("\nerror AUROC, test + near-OOD tokens: raw / within MAP-entropy deciles")
     for score, r in report["error"]["test+near_ood"].items():
         print(f"  {score:22s} {r['raw']:.3f} / {r['within_entropy']:.3f}")
+
+    if args.samples:
+        print(f"\n{args.method} MI vs hidden-state scores: MI alone / score alone / "
+              f"MI within score quintiles / combined")
+        for name, r in report["combine"].items():
+            print(f"  {name}")
+            for s, x in r.items():
+                print(f"    {s:11s} {x['mi']:.3f} / {x['score']:.3f} / {x['mi_within']:.3f} / {x['combined']:.3f}")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

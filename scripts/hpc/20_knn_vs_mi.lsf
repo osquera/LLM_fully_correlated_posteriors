@@ -1,0 +1,27 @@
+#!/bin/sh
+# Is the hidden-state k-NN's win over the posterior (E14) a fair fight, and
+# is the posterior's MI complementary to it? baselines_single_pass.py with the
+# token-mode posterior's per-sequence MI, answer tokens, distances fitted on
+#   all          the whole fine-tuning split (2000 sequences, as in E14)
+#   constrained  the projection's 256 sequences only (the posterior's data)
+# reporting per OOD set MI alone, the distance alone, MI within quintiles of
+# the distance, and their test-standardised sum. ~30 min on an H100.
+#   bsub < scripts/hpc/20_knn_vs_mi.lsf
+#BSUB -J pb_knn_mi
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 3:00
+#BSUB -o logs/%J_knn_mi.out
+#BSUB -e logs/%J_knn_mi.err
+
+. scripts/hpc/env.sh
+
+for fit in all constrained; do
+    uv run python scripts/baselines_single_pass.py --like "$SAMPLES_TOK" --adapter "$ADAPTER" \
+        --samples "$SAMPLES_TOK" --method token/projected_measured --fit-on "$fit" \
+        --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+        --out "figures/knn_vs_mi${SUF}_fit_$fit.json"
+done

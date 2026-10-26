@@ -1,0 +1,33 @@
+#!/bin/sh
+# Error bars for the answer-token numbers (E11, E14): re-score the token-mode
+# posteriors of seeds 0-2 (seed 0 = $SAMPLES_TOK, seeds 1-2 from
+# submit_token_seeds.sh) on answer tokens, with evaluate_posterior.py
+# (WikiText, test NLL / ECE, error AUROC; aggregated over seeds) and
+# analyze_posterior.py (near-OOD sets, held-out Lemma 4.3). ~2 h.
+#   bsub < scripts/hpc/19_answer_only_seeds.lsf
+#BSUB -J pb_ans_seeds
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_ans_seeds.out
+#BSUB -e logs/%J_ans_seeds.err
+
+. scripts/hpc/env.sh
+
+stem="${SAMPLES_TOK%.pt}"
+for seed in 0 1 2; do
+    [ "$seed" = 0 ] && samples="$SAMPLES_TOK" || samples="${stem}_seed$seed.pt"
+    [ -f "$samples" ] || { echo "no $samples, skipping seed $seed"; continue; }
+    uv run python scripts/evaluate_posterior.py --samples "$samples" --adapter "$ADAPTER" \
+        --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+        --out "figures/posterior_eval_answer_only${SUF}_token_seed$seed.json"
+    uv run python scripts/analyze_posterior.py --samples "$samples" --adapter "$ADAPTER" \
+        --methods token/projected_measured token/isotropic_measured \
+        --test-split "train[2000:2256]" --n-eval 256 --score-on response \
+        --out "figures/analysis_answer_only${SUF}_token_seed$seed.json"
+done
+uv run python scripts/aggregate_seeds.py figures/posterior_eval_answer_only"$SUF"_token_seed*.json \
+    --out "figures/posterior_eval_answer_only${SUF}_token_seeds.json"

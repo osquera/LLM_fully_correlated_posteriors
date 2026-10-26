@@ -364,13 +364,37 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   result is equally stable and equally negative: MI adds nothing to the
   softmax for wrong tokens, projected and isotropic alike.
 
+## E19 Projection residual: 500 vs 1500 sweeps
+
+- **Date / job.** 2026-10-26; H100 pipeline with `N_ITER=1500`
+  (`QUEUE=gpuh100 SKIP_FINETUNE=1 SKIP_SEQUENCE=1 N_ITER=1500`), outputs
+  tagged `_it1500`. Same theta_map, seed and noise as the 500-sweep token
+  posterior; all-token evaluation and tolerance sweep.
+- **Results.**
+
+  | | 500 sweeps | 1500 sweeps |
+  |---|---|---|
+  | kernel residual mean / max | 0.0155 / 0.0183 | **0.0052 / 0.0072** |
+  | projection time (H100) | 2.9 h | 8.0 h |
+  | measured alpha / ‖δ‖ | 6,347 / 8.38 | 6,256 / 8.44 |
+  | worst train dNLL (tol 0.0114) | 0.01142 | 0.01143 |
+  | test NLL (MAP 1.3248) | 1.3249 | 1.3249 |
+  | WikiText AUROC (all tokens) | 0.991 | 0.990 |
+  | train / test MI | 3.11e-4 / 3.87e-4 | 3.17e-4 / 3.93e-4 |
+
+  Tolerance sweep (tol 0.5%-20% of MAP NLL): alpha 0-5% lower at 1500 sweeps
+  (samples 0-3% larger), worst train dNLL, test NLL and WikiText AUROC equal
+  to within 0.003 except at tol 5% (0.700 -> 0.662, where the curve is steep).
+- **Showed.** At 256 constrained sequences 500 sweeps are enough: tripling
+  them cuts the residual 3x and changes no result. The residual left over at
+  500 sweeps only cost ~2% of sample size (the measured alpha absorbs it).
+  Does not settle the larger runs: at n = 1024 the residual was 0.093 (E15),
+  5x this one, so those may still want more sweeps.
+
 ---
 
 ## Pending
 
-- **E19 Projection residual** (H100 pipeline with `N_ITER=1500`, outputs tagged
-  `_it1500`; started 2026-10-26). Do the token-mode results change when the
-  alternating projections run 3x longer (smaller kernel residual)?
 
 - **E17 Knowledge coverage** (`18_bio.lsf`; running since 2026-10-26).
   Precondition met (MAP-only, `bio_eval_map.json`): exact-match accuracy by

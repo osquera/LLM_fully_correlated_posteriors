@@ -1,0 +1,56 @@
+#!/bin/sh
+# E17: does the posterior's uncertainty track how well the training data
+# supports a fact? Synthetic biographies with known per-person frequency
+# (0-16 mentions; scripts/make_bio_corpus.py):
+#   1. corpus, 2. LoRA fine-tune on it (q/v + MLP, so facts can be stored),
+#   3. 8 more fine-tunes (seeds 1-8) for the ensemble baseline,
+#   4. token-mode posterior constrained on the whole corpus,
+#   5. DropConnect / ensemble samples, 6. cloze-probe evaluation against
+#      entropy, isotropic, ensemble, DropConnect and hidden-state k-NN.
+# Step 6 first prints MAP accuracy per frequency: facts must be learned in a
+# frequency-dependent way for the rest to mean anything.
+# ~12-14 h on an H100 (projection: ~60k constrained tokens, 1000 sweeps).
+#   bsub < scripts/hpc/18_bio.lsf
+#BSUB -J pb_bio
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_bio.out
+#BSUB -e logs/%J_bio.err
+
+. scripts/hpc/env.sh
+
+corpus=data/bio/corpus.json
+adapter=checkpoints/bio_lora
+samples=samples/posterior_token_bio.pt
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+
+uv run python scripts/make_bio_corpus.py --per-freq 40 --out "$corpus"
+ft 0 "$adapter"
+# MAP-only check first: accuracy per frequency, before hours of projection
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --out figures/bio_eval_map.json
+
+members=""
+for s in 1 2 3 4 5 6 7 8; do ft "$s" "${adapter}_ens$s"; members="$members ${adapter}_ens$s"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 1000 --tol 1e-3 --alpha-tol 0.01 \
+    --adapter "$adapter" --out "$samples"
+
+uv run python scripts/build_baseline_samples.py --adapter "$adapter" --members $members \
+    --like "$samples" --dropconnect-p 0.1 --out samples/baselines_bio.pt
+
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --samples "$samples" samples/baselines_bio.pt --out figures/bio_eval.json

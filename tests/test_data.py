@@ -43,3 +43,41 @@ def test_truncated_response_gives_an_empty_mask(tokenizer):
 def test_missing_marker_raises(tokenizer):
     with pytest.raises(ValueError, match="Response"):
         encode_texts(tokenizer, ["plain text, no template"], max_length=16, loss_on="response")
+
+
+def test_load_texts_local_json(tmp_path):
+    import json
+
+    from llmproj.data import load_texts
+    p = tmp_path / "corpus.json"
+    p.write_text(json.dumps({"texts": [f"doc {i}" for i in range(10)]}))
+    assert load_texts(str(p), "train") == [f"doc {i}" for i in range(10)]
+    assert load_texts(str(p), "train[2:5]") == ["doc 2", "doc 3", "doc 4"]
+    assert load_texts(str(p), "train[:3]") == ["doc 0", "doc 1", "doc 2"]
+
+
+def test_synthbio_frequencies_and_name_controls():
+    from collections import Counter
+
+    from llmproj.synthbio import make_corpus, make_people, make_probes
+    people = make_people(freqs=(0, 1, 4), per_freq=30, seed=0)
+    docs = make_corpus(people, seed=0)
+    assert len(docs) == 30 * (0 + 1 + 4)
+    names = [p.name for p in people]
+    assert len(set(names)) == len(names)
+    # each person appears in exactly f documents (full name, every sentence)
+    for p in people:
+        assert sum(p.name + " " in d or p.name + "'" in d for d in docs) == p.freq
+    # never-seen people have first and last names that seen people also use
+    seen = [p for p in people if p.freq > 0]
+    first = Counter(p.name.split()[0] for p in seen)
+    last = Counter(p.name.split()[1] for p in seen)
+    unseen = [p for p in people if p.freq == 0]
+    familiar = sum(first[p.name.split()[0]] > 0 and last[p.name.split()[1]] > 0 for p in unseen)
+    assert familiar == len(unseen)
+    probes = make_probes(people)
+    assert len(probes) == len(people) * 4
+    city = next(q for q in probes if q["attr"] == "city")
+    assert city["prompt"].endswith("was born in") and city["answer"].startswith(" ")
+    # deterministic
+    assert make_corpus(make_people((0, 1, 4), 30, 0), 0) == docs

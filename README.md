@@ -146,6 +146,14 @@ Follow-ups on existing samples, each a separate job (both honour `LOSS_ON`):
   (`scripts/sample_topk_posterior.py`), and compare with the exact and
   isotropic posteriors on the same noise. Also reports J^L's spectrum: the
   share of its energy in the top k directions.
+- `bsub < scripts/hpc/18_bio.lsf` (E17): does uncertainty track how well the
+  training data supports a fact? A synthetic biography corpus with known
+  per-person frequency 0-16 (`scripts/make_bio_corpus.py`,
+  `llmproj.synthbio`; unseen people get names made of familiar first and
+  last names), a LoRA (q/v + MLP) fine-tuned on it, a token-mode posterior
+  constrained on the whole corpus, and cloze probes scored by MI, entropy,
+  the LoRA ensemble, DropConnect and hidden-state k-NN
+  (`scripts/evaluate_bio.py`). `--dataset` accepts a local `.json` corpus.
 - `scripts/plot_followups.py` plots `analysis.json` and the seed summary
   (`figures/followups.png`); `scripts/plot_constraints.py` compares sequence
   mode (256 / 1792 sequences) with token mode; `scripts/plot_semantic.py`

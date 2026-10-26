@@ -332,8 +332,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 ## Pending
 
 - **E15 n = 1024.** Running (~16 h; residual expected worse than 0.045).
-- **E17 Knowledge coverage.** Does MI track how well the training data
-  supports a fact, beyond entropy and hidden-state k-NN? Proposed designs:
-  (a) base-weight posterior + PopQA (sparse constraints, fact frequency
-  unknown at our scale), (b) a synthetic biography corpus with controlled
-  per-fact frequency (0-32 mentions) and a dense LoRA posterior.
+- **E17 Knowledge coverage** (`18_bio.lsf`). Does MI track how well the
+  training data supports a fact, beyond entropy and hidden-state k-NN?
+  Chosen design (2026-10-26): synthetic biographies, 40 people per frequency
+  0/1/2/4/8/16 (1,240 documents, 60k tokens), LoRA r=8 on q/v + MLP
+  (P = 1.98M), 20 epochs; token-mode posterior on the whole corpus (8 x 1000
+  sweeps); 960 cloze probes. Tasks: unseen vs seen, rare (f <= 1) vs frequent
+  (f >= 8), MAP wrong vs right; raw and within entropy quintiles. PopQA with a
+  base-weight posterior was set aside: at our scale its constraints would be
+  ~0.02% dense and the fact frequencies unknown.

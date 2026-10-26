@@ -63,10 +63,23 @@ def load_texts(dataset: str, split: str, text_field: str = "text") -> list[str]:
     """The training / evaluation texts of ``dataset``.
 
     A name in QA_DATASETS gives Alpaca-format short-answer QA (``qa_text``);
+    a path ending in .json is a local corpus ``{"texts": [...]}`` (e.g. from
+    scripts/make_bio_corpus.py), sliced like a split ("train[:100]");
     anything else is a Hugging Face dataset whose ``text_field`` (or first
     column) is used as is, e.g. tatsu-lab/alpaca's "text".
     """
     from datasets import load_dataset
+
+    if dataset.endswith(".json"):
+        import json
+        import re
+
+        texts = json.loads(open(dataset).read())["texts"]
+        m = re.fullmatch(r"\w+(?:\[(-?\d*):(-?\d*)\])?", split)
+        if not m:
+            raise ValueError(f"split {split!r}: use NAME or NAME[a:b] for a local corpus")
+        a, b = (int(x) if x else None for x in m.groups())
+        return texts[a:b]
 
     if dataset in QA_DATASETS:
         path, cfg, row = QA_DATASETS[dataset]

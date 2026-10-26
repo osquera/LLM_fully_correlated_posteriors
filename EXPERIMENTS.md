@@ -35,7 +35,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Current picture
 
-*(as of 2026-10-25; update when an entry changes it)*
+*(as of 2026-10-26; update when an entry changes it)*
 
 1. **Keeps the fit.** At matched sample norm the token-projected posterior
    leaves training and test NLL at the MAP's and breaks the tolerance on 1.8%
@@ -52,11 +52,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    answer spread (E09). Ambiguity was undetectable at 135M and 360M (E07, E10).
 5. **Constraint density decides everything.** Sequence mode (256 constraints)
    and QA (2,320) fail; token mode (~14.7k) works; held-out violations fall
-   ~3x per doubling of constrained data while new directions per token fall
-   (E06, E10, E15).
-6. **Open:** whether a posterior over the knowledge-bearing base weights
-   catches what k-NN cannot (unknown facts on normal-looking questions; E17),
-   and whether the top-k directions suffice (E16).
+   >= 3x per doubling of constrained data, to 0.1% at 512 sequences (E06,
+   E10, E15).
+6. **The constraints are low-rank, and the OOD signal is in the top
+   directions.** 2048 of ~14.7k directions carry 96% of J^L's energy and
+   recover 94-100% of the exact posterior's OOD AUROCs; held-out safety at a
+   given sample size needs the tail (E16). Encouraging for scaling up.
+7. **Open:** whether the posterior catches what k-NN cannot: unknown facts on
+   normal-looking questions (E17).
 
 ---
 
@@ -244,19 +247,21 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## E14 Baselines: LoRA ensemble, DropConnect, hidden-state distances
 
-- **Date / job.** 2026-10-25; `15_baselines.lsf`; answer tokens.
+- **Date / job.** 2026-10-25, rerun 2026-10-26 with the Dolly fix (dbb42ac)
+  and the batched token posterior (‖δ‖ 8.38); `15_baselines.lsf`; answer
+  tokens. Dolly: 215 of 256 sequences have scored answer tokens.
 - **Results.**
 
-  | score | passes | WikiText | CodeAlpaca | GSM8K | Spanish | held-out over tol |
-  |---|---|---|---|---|---|---|
-  | MAP entropy | 1 | 0.937 | 0.167 | 0.297 | 0.696 | - |
-  | token projected (MI) | 8 | 0.868 | 0.497 | 0.820 | 0.820 | 1.8% |
-  | token isotropic (MI) | 8 | 0.294 | 0.344 | 0.347 | 0.514 | 99.9% |
-  | LoRA ensemble, 8 seeds (MI) | 8 | 0.276 | 0.439 | 0.496 | 0.575 | 63.8% |
-  | DropConnect p=0.1 (MI) | 8 | 0.333 | 0.309 | 0.376 | 0.510 | 18.6% |
-  | k-NN, layer 15 | 1 | 0.938 | 0.888 | 0.895 | 0.957 | - |
-  | Mahalanobis, layer 15 | 1 | 0.914 | 0.895 | 0.876 | 0.910 | - |
-  | k-NN / Mahalanobis, layer 30 | 1 | 0.83 / 0.65 | 0.40 / 0.75 | 0.18 / 0.25 | 0.92 / 0.95 | - |
+  | score | passes | WikiText | Dolly | CodeAlpaca | GSM8K | Spanish | held-out over tol |
+  |---|---|---|---|---|---|---|---|
+  | MAP entropy | 1 | 0.937 | 0.566 | 0.167 | 0.297 | 0.696 | - |
+  | token projected (MI) | 8 | 0.867 | 0.562 | 0.496 | 0.820 | 0.819 | 1.8% |
+  | token isotropic (MI) | 8 | 0.295 | 0.419 | 0.344 | 0.349 | 0.515 | 99.9% |
+  | LoRA ensemble, 8 seeds (MI) | 8 | 0.276 | 0.425 | 0.439 | 0.496 | 0.575 | 63.8% |
+  | DropConnect p=0.1 (MI) | 8 | 0.333 | 0.430 | 0.309 | 0.376 | 0.510 | 18.6% |
+  | k-NN, layer 15 | 1 | 0.938 | 0.750 | 0.888 | 0.895 | 0.957 | - |
+  | Mahalanobis, layer 15 | 1 | 0.914 | 0.671 | 0.895 | 0.876 | 0.910 | - |
+  | k-NN / Mahalanobis, layer 30 | 1 | 0.83 / 0.65 | 0.73 / 0.64 | 0.40 / 0.75 | 0.18 / 0.25 | 0.92 / 0.95 | - |
 
   Error AUROC (test + near-OOD): MAP 1-conf 0.865; all sampling methods raw
   0.77-0.79, within entropy deciles 0.53-0.56; hidden-state distances 0.40-0.50.
@@ -264,40 +269,71 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **Showed.** The projected posterior is the best of all sampling-based
   methods, including the deep-ensemble reference (whose members disagree most
   in-distribution). But one-pass mid-layer k-NN is the better input-novelty
-  detector. The posterior's case must rest on what input distance cannot see:
-  unknown facts on normal-looking inputs (E17). Dolly omitted (see E11 note).
+  detector on every set. The posterior's case must rest on what input distance
+  cannot see: unknown facts on normal-looking inputs (E17).
 
-## E15 Scaling curve: constrained sequences 64 -> 1024 (partial)
+## E15 Scaling curve: constrained sequences 64 -> 1024
 
-- **Date / job.** 2026-10-25; `16_scaling.lsf`; same 976 held-out sequences
+- **Date / job.** 2026-10-25/26; `16_scaling.lsf`; same 976 held-out sequences
   (train[1024:2000]) for every n; answer tokens; at own alpha and rescaled to
   ‖δ‖ = 8.25.
 - **Results** (matched norm 8.25):
 
   | n constrained | 64 | 128 | 256 | 512 | 1024 |
   |---|---|---|---|---|---|
-  | held-out over tol | 16.4% | 5.4% | 1.8% | pending | pending |
-  | held-out mean abs dNLL | 0.0038 | 0.0030 | 0.0025 | | |
-  | rank (constraint directions) | ~4,600 | ~8,200 | ~14,700 | | |
-  | rank per constrained token | 72% | 64% | 57% | | |
-  | WikiText / GSM8K / Spanish AUROC | 0.81 / 0.74 / 0.79 | 0.84 / 0.79 / 0.81 | 0.87 / 0.82 / 0.82 | | |
-  | projection time (H100) / residual | 0.8 h / 0.005 | 1.6 h / 0.010 | 2.9 h / 0.018 | | |
+  | held-out over tol | 16.4% | 5.4% | 1.8% | **0.1%** | pending |
+  | held-out over tol, own alpha | 31.9% | 9.9% | 1.8% | 1.1% | |
+  | held-out mean abs dNLL | 0.0038 | 0.0030 | 0.0025 | 0.0020 | |
+  | rank (constraint directions) | ~4,600 | ~8,200 | ~14,700 | ~30,000 | |
+  | rank per constrained token | 72% | 64% | 57% | ~58% | |
+  | WikiText / GSM8K / Spanish AUROC | 0.81 / 0.74 / 0.79 | 0.84 / 0.79 / 0.81 | 0.87 / 0.82 / 0.82 | 0.88 / 0.86 / 0.84 | |
+  | projection time (H100) / residual | 0.8 h / 0.005 | 1.6 h / 0.010 | 2.9 h / 0.018 | 5.9 h / 0.045 | |
 
-- **Showed so far.** Held-out violations fall ~3x per doubling (~n^-1.6);
-  new directions per token fall (constraints increasingly redundant); OOD
-  detection improves steadily. At fixed 500 sweeps the residual grows with n.
+- **Showed so far.** Held-out violations fall at least ~3x per doubling
+  (n = 512 beat the extrapolated 0.6%); OOD detection keeps improving. The
+  rank per token stopped falling at ~57%. At fixed 500 sweeps the residual
+  grows with n (0.045 at 512): larger constraint sets need more sweeps.
+
+## E16 Top-k directions vs the exact kernel
+
+- **Date / job.** 2026-10-26; `17_topk.lsf` (fe77c9e). Top 2048 right
+  singular vectors of token-mode J^L (256 sequences) by randomized subspace
+  iteration (3 iterations + Rayleigh-Ritz, 4.4 h on H100); samples remove the
+  top k on the exact posterior's noise; answer tokens; held-out =
+  train[256:2000].
+- **Results.** Energy share of ||J^L||_F^2 in the top k: 16 -> **64%**,
+  64 -> 74%, 256 -> 84%, 1024 -> 93%, 2048 -> **96%** (of ~14.7k constraint
+  directions). Distance from the kernel ||J delta|| / ||delta||: random 2.8,
+  k=2048 0.45, exact 0.018.
+
+  | method | ‖δ‖ own alpha | held-out over tol, own alpha / at ‖δ‖ 8.25 | WikiText | Dolly | CodeAlpaca | GSM8K | Spanish |
+  |---|---|---|---|---|---|---|---|
+  | exact projected | 8.38 | 1.8% / 1.7% | 0.867 | 0.562 | 0.496 | 0.820 | 0.819 |
+  | top-2048 | 6.99 | 8.8% / 21.9% | 0.837 | 0.544 | 0.497 | 0.793 | 0.823 |
+  | top-1024 | 5.53 | 6.5% / 45.9% | 0.821 | 0.533 | 0.473 | 0.754 | 0.809 |
+  | top-256 | 3.83 | 3.2% / 75.1% | 0.792 | 0.514 | 0.431 | 0.656 | 0.783 |
+  | top-64 | 2.53 | 0.9% / 93.9% | 0.677 | 0.488 | 0.386 | 0.547 | 0.719 |
+  | top-16 | 1.33 | 0.1% / 98.4% | 0.487 | 0.450 | 0.347 | 0.426 | 0.645 |
+  | isotropic | 8.38 | 99.9% / 99.8% | 0.295 | 0.419 | 0.344 | 0.349 | 0.515 |
+
+  (OOD AUROCs at own alpha; at matched norm they differ by < 0.03.)
+  Error AUROC unchanged across all (raw 0.77-0.79, within deciles 0.53-0.55).
+- **Showed.** J^L is strongly concentrated. The **OOD signal lives in the top
+  directions**: 2048 directions (14% of the rank) recover 94-100% of the
+  exact posterior's AUROCs. But **the fit guarantee needs the tail**: at the
+  same sample size top-2048 still breaks the tolerance on 22% of unseen
+  sequences (exact 1.7%); with alpha measured for it, it stays safe on the
+  constrained data by shrinking the samples (‖δ‖ 6.99), at 8.8% held-out.
+  A top-k posterior is a workable approximation with a dial: more k, more
+  safety at a given size.
 
 ---
 
 ## Pending
 
-- **E15 (rest).** n = 512 running, 1024 queued (~16 h). Prediction from the
-  trend: ~0.6% and ~0.2% held-out over tol.
-- **E14 rerun.** Corrected Dolly AUROCs (dbb42ac), with the batched token
-  posterior.
-- **E16 Top-k vs exact kernel** (`17_topk.lsf`). Remove only the top 16 ...
-  2048 directions of J^L; energy share per k; held-out and OOD vs exact.
-- **E17 Posterior over the base weights, PopQA.** Transformer blocks of
-  SmolLM2-135M (embeddings excluded: rare-token confound), constrained on a
-  FineWeb-Edu sample; does MI rise for rare entities beyond entropy and
-  beyond hidden-state k-NN?
+- **E15 n = 1024.** Running (~16 h; residual expected worse than 0.045).
+- **E17 Knowledge coverage.** Does MI track how well the training data
+  supports a fact, beyond entropy and hidden-state k-NN? Proposed designs:
+  (a) base-weight posterior + PopQA (sparse constraints, fact frequency
+  unknown at our scale), (b) a synthetic biography corpus with controlled
+  per-fact frequency (0-32 mentions) and a dense LoRA posterior.

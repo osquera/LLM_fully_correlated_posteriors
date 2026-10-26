@@ -42,7 +42,8 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    of never-projected training sequences; isotropic, diagonal Laplace and LLA
    ~90-100%, a LoRA ensemble 64% (E01, E03, E14).
 2. **Detects unfamiliar input, where the MAP's entropy fails.** Answer tokens:
-   GSM8K 0.82 vs entropy 0.30, Spanish 0.82 vs 0.70 (E11). It beats every
+   GSM8K 0.83 ± 0.01 vs entropy 0.30, Spanish 0.82 ± 0.01 vs 0.70 (E11,
+   3 posterior seeds in E18). It beats every
    other sampling method, including an 8-member LoRA ensemble (E14).
 3. **But a single-pass hidden-state k-NN beats it at that** (WikiText 0.94,
    CodeAlpaca 0.89, GSM8K 0.90, Spanish 0.96; E14). As a pure input-novelty
@@ -221,7 +222,8 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   0.696. Error AUROC (MI): projected 0.724, isotropic 0.708 (was 0.767 /
   0.646); MAP 1-conf 0.835.
   *Dolly biased low: 41 of 256 answers are cut off by max_length and were
-  scored 0 (fixed in dbb42ac; rerun pending).
+  scored 0 (fixed in dbb42ac). Rerun on the 215 scored answers (E18):
+  projected 0.561 ± 0.018, MAP entropy 0.566.
 - **Showed.** The shared prompt template inflated every AUROC by 0.1-0.25
   and created the projected-vs-isotropic error-AUROC gap. What survives: a
   real OOD signal where entropy fails (GSM8K, Spanish). Report answer-token
@@ -331,9 +333,44 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   A top-k posterior is a workable approximation with a dial: more k, more
   safety at a given size.
 
+## E18 Answer-token error bars over posterior seeds
+
+- **Date / job.** 2026-10-26; `19_answer_only_seeds.lsf` (H100, 27 min).
+  E11's answer-token evaluation repeated on the token-mode posteriors of
+  seeds 0-2 (same theta_map, fresh projection noise). Mean ± std over seeds.
+- **Results** (answer tokens; AUROC of per-sequence MI, MAP: entropy):
+
+  | | MAP entropy | token projected | token isotropic |
+  |---|---|---|---|
+  | WikiText | 0.937 | 0.861 ± 0.011 | 0.336 ± 0.036 |
+  | Dolly (215 scored) | 0.566 | 0.561 ± 0.018 | 0.410 ± 0.011 |
+  | CodeAlpaca | 0.167 | 0.504 ± 0.012 | 0.333 ± 0.014 |
+  | GSM8K | 0.297 | **0.834 ± 0.014** | 0.352 ± 0.016 |
+  | Spanish Alpaca | 0.696 | **0.815 ± 0.013** | 0.549 ± 0.033 |
+
+  | | projected | isotropic |
+  |---|---|---|
+  | ‖δ‖ | 8.83 ± 0.40 | 8.97 ± 0.41 |
+  | test NLL (MAP 1.7764) | 1.7763 ± 0.0001 | 1.7761 ± 0.0004 |
+  | held-out train over tol | 3.5% ± 1.6% | 100% |
+  | error AUROC, MI raw (MAP 1-conf 0.854) | 0.778 ± 0.001 | 0.768 ± 0.004 |
+  | error AUROC, MI within entropy deciles | 0.556 ± 0.001 | 0.554 ± 0.002 |
+  | logistic error AUROC, softmax -> softmax+MI | 0.854 -> 0.853 | 0.854 -> 0.853 |
+
+- **Showed.** E11 holds up: seed-to-seed spread is ~0.01-0.02 AUROC, far
+  below the gaps that matter (GSM8K +0.54 and Spanish +0.12 over entropy,
+  +0.3-0.5 over isotropic). Dolly carries no signal for any method once the
+  truncated answers are dropped: its answers look like Alpaca's. The error
+  result is equally stable and equally negative: MI adds nothing to the
+  softmax for wrong tokens, projected and isotropic alike.
+
 ---
 
 ## Pending
+
+- **E19 Projection residual** (H100 pipeline with `N_ITER=1500`, outputs tagged
+  `_it1500`; started 2026-10-26). Do the token-mode results change when the
+  alternating projections run 3x longer (smaller kernel residual)?
 
 - **E17 Knowledge coverage** (`18_bio.lsf`; running since 2026-10-26).
   Precondition met (MAP-only, `bio_eval_map.json`): exact-match accuracy by

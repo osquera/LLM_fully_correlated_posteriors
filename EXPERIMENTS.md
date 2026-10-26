@@ -52,8 +52,8 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    answer spread (E09). Ambiguity was undetectable at 135M and 360M (E07, E10).
 5. **Constraint density decides everything.** Sequence mode (256 constraints)
    and QA (2,320) fail; token mode (~14.7k) works; held-out violations fall
-   >= 3x per doubling of constrained data, to 0.1% at 512 sequences (E06,
-   E10, E15).
+   >= 3x per doubling of constrained data and are ~0 from 512 sequences on,
+   while OOD detection rises to ~0.87 (E06, E10, E15).
 6. **The constraints are low-rank, and the OOD signal is in the top
    directions.** 2048 of ~14.7k directions carry 96% of J^L's energy and
    recover 94-100% of the exact posterior's OOD AUROCs; held-out safety at a
@@ -281,18 +281,22 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
   | n constrained | 64 | 128 | 256 | 512 | 1024 |
   |---|---|---|---|---|---|
-  | held-out over tol | 16.4% | 5.4% | 1.8% | **0.1%** | pending |
-  | held-out over tol, own alpha | 31.9% | 9.9% | 1.8% | 1.1% | |
-  | held-out mean abs dNLL | 0.0038 | 0.0030 | 0.0025 | 0.0020 | |
-  | rank (constraint directions) | ~4,600 | ~8,200 | ~14,700 | ~30,000 | |
-  | rank per constrained token | 72% | 64% | 57% | ~58% | |
-  | WikiText / GSM8K / Spanish AUROC | 0.81 / 0.74 / 0.79 | 0.84 / 0.79 / 0.81 | 0.87 / 0.82 / 0.82 | 0.88 / 0.86 / 0.84 | |
-  | projection time (H100) / residual | 0.8 h / 0.005 | 1.6 h / 0.010 | 2.9 h / 0.018 | 5.9 h / 0.045 | |
+  | held-out over tol | 16.4% | 5.4% | 1.8% | **0.1%** | **0.1%** |
+  | held-out over tol, own alpha | 31.9% | 9.9% | 1.8% | 1.1% | 0.1% |
+  | held-out mean abs dNLL | 0.0038 | 0.0030 | 0.0025 | 0.0020 | 0.0015 |
+  | rank (constraint directions) | ~4,600 | ~8,200 | ~14,700 | ~30,000 | ~60,900 |
+  | rank per constrained token | 72% | 64% | 57% | ~58% | 57% |
+  | WikiText / GSM8K / Spanish AUROC | 0.81 / 0.74 / 0.79 | 0.84 / 0.79 / 0.81 | 0.87 / 0.82 / 0.82 | 0.88 / 0.86 / 0.84 | 0.88 / 0.87 / 0.86 |
+  | projection time (H100) / residual | 0.8 h / 0.005 | 1.6 h / 0.010 | 2.9 h / 0.018 | 5.9 h / 0.045 | 11.8 h / 0.093 |
 
-- **Showed so far.** Held-out violations fall at least ~3x per doubling
-  (n = 512 beat the extrapolated 0.6%); OOD detection keeps improving. The
-  rank per token stopped falling at ~57%. At fixed 500 sweeps the residual
-  grows with n (0.045 at 512): larger constraint sets need more sweeps.
+- **Showed.** Held-out violations fall at least ~3x per doubling and reach
+  the resolution floor (1 of 976 sequences; worst change 0.012 vs tol 0.0114)
+  from 512 sequences on. OOD detection improves and flattens (WikiText 0.88
+  at 512 and 1024). The rank per constrained token settles at ~57%: beyond
+  256 sequences new data adds new directions at a constant rate, not a
+  falling one. Cost grows linearly (11.8 h at 1024) and, at fixed 500
+  sweeps, so does the residual (0.093 at 1024): large constraint sets need
+  more sweeps, or the top-k approximation (E16).
 
 ## E16 Top-k directions vs the exact kernel
 
@@ -331,8 +335,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E15 n = 1024.** Running (~16 h; residual expected worse than 0.045).
-- **E17 Knowledge coverage** (`18_bio.lsf`). Does MI track how well the
+- **E17 Knowledge coverage** (`18_bio.lsf`; running since 2026-10-26).
+  Precondition met (MAP-only, `bio_eval_map.json`): exact-match accuracy by
+  frequency 0/1/2/4/8/16 = 3.7% / 85.6% / 92.5% / 96.9% / 99.4% / 99.4%;
+  mean answer-token entropy 0.45 / 0.23 / 0.13 / 0.08 / 0.03 / 0.02, MAP
+  confidence 86% on never-seen people, i.e. **confident hallucination** of
+  their facts. MAP 1-conf, within entropy quintiles: unseen 0.64, rare 0.67,
+  wrong 0.82. Hidden-state k-NN: middle layer ~0.5 on every task (the name
+  control works); last layer rare 0.78 raw / 0.73 within. Does MI track how well the
   training data supports a fact, beyond entropy and hidden-state k-NN?
   Chosen design (2026-10-26): synthetic biographies, 40 people per frequency
   0/1/2/4/8/16 (1,240 documents, 60k tokens), LoRA r=8 on q/v + MLP

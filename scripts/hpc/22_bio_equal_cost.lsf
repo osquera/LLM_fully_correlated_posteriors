@@ -1,0 +1,23 @@
+#!/bin/sh
+# E22: knowledge coverage at equal inference cost. The 8 LoRA-ensemble members
+# and the 8 projected-posterior samples of E17 split into disjoint groups of
+# 2 and 4 (4 + 2 groups each): a 2- or 4-member ensemble against a 2- or
+# 4-sample posterior, mean ± std over the groups. Needs 18_bio.lsf's outputs.
+# ~1.5 h on an H100.
+#   bsub < scripts/hpc/22_bio_equal_cost.lsf
+#BSUB -J pb_bio_cost
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_bio_cost.out
+#BSUB -e logs/%J_bio_cost.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples samples/posterior_token_bio.pt samples/baselines_bio.pt \
+    --methods token/projected_measured token/isotropic_measured baseline/lora_ensemble \
+    --subsets 2 4 --out figures/bio_eval_equal_cost.json

@@ -1,0 +1,27 @@
+#!/bin/sh
+# E24: does the top-k approximation keep the knowledge-coverage signal, and
+# how much does it depend on the posterior's noise draw? Top-1024 subspace of
+# the bio J^L (68k rows), then top-64/256/1024 samples for noise seeds 0-2
+# (seed 0 = E17's exact posterior's noise); E17's evaluation. ~8-10 h on an
+# H100. Needs 18_bio.lsf's outputs.
+#   bsub < scripts/hpc/24_bio_topk.lsf
+#BSUB -J pb_bio_topk
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=32GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_bio_topk.out
+#BSUB -e logs/%J_bio_topk.err
+
+. scripts/hpc/env.sh
+
+topk=samples/posterior_topk_bio.pt
+[ -f "$topk" ] || uv run python scripts/sample_topk_posterior.py --adapter checkpoints/bio_lora \
+    --dataset data/bio/corpus.json --split train --max-length 96 --n-train 100000 \
+    --proj-batch-size 16 --ks 64 256 1024 --n-iter 3 --vec-batch 16 \
+    --n-samples 8 --alpha-tol 0.01 --sample-seeds 1 2 --out "$topk"
+
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples samples/posterior_token_bio.pt "$topk" --out figures/bio_eval_topk.json

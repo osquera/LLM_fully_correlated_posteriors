@@ -26,6 +26,11 @@ with and without each method's log MI (does MI add to the softmax as a whole).
 NLL change on the corpus vs theta_map (worst, mean |.|, share over the
 sampler's tolerance). Per-probe scores go into the output for later analysis.
 
+--subsets K... splits each of --subset-methods into disjoint groups of K
+samples (``name[K:i]``; 8 samples, K = 2 -> 4 groups) and reports mean ± std
+over the groups: a K-member ensemble vs a K-sample posterior at equal
+inference cost.
+
   uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json \\
       --adapter checkpoints/bio_lora --samples samples/posterior_token_bio.pt samples/baselines_bio.pt
 """
@@ -62,6 +67,9 @@ def parse_args():
     ap.add_argument("--norms", type=float, nargs="*", default=[],
                     help="also evaluate token-mode posterior methods rescaled to these ||delta||")
     ap.add_argument("--max-length", type=int, default=96, help="corpus encoding for the fit cost")
+    ap.add_argument("--subsets", type=int, nargs="*", default=[])
+    ap.add_argument("--subset-methods", nargs="*",
+                    default=["baseline/lora_ensemble", "token/projected_measured"])
     ap.add_argument("--layers", type=int, nargs="+", default=None)
     ap.add_argument("--knn-k", type=int, default=10)
     ap.add_argument("--n-bins", type=int, default=5)
@@ -102,6 +110,24 @@ def spearman(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(rx, ry)[0, 1])
 
 
+def subset_summary(report, names, sizes):
+    """Mean ± std over the disjoint K-sample groups of each method."""
+    out = {}
+    for name in names:
+        for K in sizes:
+            keys = [k for k in report["spearman"] if k.startswith(f"{name}[{K}:")]
+            if not keys:
+                continue
+            r = {"n_groups": len(keys)}
+            for t in report["tasks"]:
+                w = np.array([report["tasks"][t][k]["within_entropy"] for k in keys])
+                lg = np.array([report["logistic"][t][f"softmax+{k}"] for k in keys])
+                r[t] = {"within_entropy": {"mean": float(w.mean()), "std": float(w.std(ddof=1)) if len(w) > 1 else 0.0},
+                        "logistic": {"mean": float(lg.mean()), "std": float(lg.std(ddof=1)) if len(lg) > 1 else 0.0}}
+            out.setdefault(name, {})[K] = r
+    return out
+
+
 def main():
     args = parse_args()
     corpus = json.loads(Path(args.corpus).read_text())
@@ -133,6 +159,12 @@ def main():
             if mode == "token":
                 for n in args.norms:
                     methods[f"{key}@{n:g}"] = d.float() * (n / float(d.norm(dim=1).mean()))
+    for name in args.subset_methods:
+        for K in args.subsets:
+            if name in methods:
+                d = methods[name]
+                for i in range(d.shape[0] // K):
+                    methods[f"{name}[{K}:{i}]"] = d[i * K:(i + 1) * K]
     print(f"{len(probes)} probes; methods {list(methods)}")
 
     corpus_enc = encode_texts(tokenizer, corpus["texts"], args.max_length, loss_on="all")
@@ -199,6 +231,7 @@ def main():
             lmi = scores[k].double().clamp_min(1e-12).log()[keep, None]
             feats[f"softmax+{k}"] = torch.cat([soft[keep], lmi], 1)
         report["logistic"][t] = {k: v["auroc"] for k, v in logistic_gain(y, feats, pid[keep]).items()}
+    report["subsets"] = subset_summary(report, args.subset_methods, args.subsets)
     report["probe_scores"] = {k: v.tolist() for k, v in scores.items()}
     report["probe_freq"], report["probe_correct"] = freq.tolist(), correct.tolist()
 
@@ -221,6 +254,16 @@ def main():
         for k, v in r.items():
             if k != "softmax":
                 print(f"    {k[8:]:40s} {v:.3f}")
+    if report["subsets"]:
+        print("\nequal inference cost: K-sample groups, mean ± std over disjoint groups "
+              "(within entropy quintiles; logistic softmax + MI)")
+        for name, byk in report["subsets"].items():
+            for K, r in byk.items():
+                print(f"  {name} K={K} ({r['n_groups']} groups)")
+                for t in tasks:
+                    w, lg = r[t]["within_entropy"], r[t]["logistic"]
+                    print(f"    {t:7s} within {w['mean']:.3f} ± {w['std']:.3f}   "
+                          f"logistic {lg['mean']:.3f} ± {lg['std']:.3f}")
     print(f"\nfit cost on the corpus (MAP mean NLL {report['map_corpus_nll']:.4f}, tol {tol}):")
     print(f"  {'method':40s} {'norm':>7s} {'mean dNLL':>10s} {'worst':>8s} {'over tol':>8s}")
     for k, r in fit.items():

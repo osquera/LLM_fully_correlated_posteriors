@@ -1,0 +1,30 @@
+#!/bin/sh
+# E23: a curved posterior. Each projected bio sample (E17) walks out along its
+# direction in steps of <= 4 and is pulled back onto the fit set after every
+# step (scripts/retract_posterior.py), saved at arc length 6 ... 81; then the
+# E17/E21 evaluation of the retracted samples next to the linear posterior
+# and the LoRA ensemble. Does following the curvature close the gap to the
+# ensemble while keeping the fit? ~6-8 h on an H100. Needs 18_bio.lsf's outputs.
+#   bsub < scripts/hpc/23_bio_retract.lsf
+#BSUB -J pb_bio_retract
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_bio_retract.out
+#BSUB -e logs/%J_bio_retract.err
+
+. scripts/hpc/env.sh
+
+retracted=samples/retracted_bio.pt
+[ -f "$retracted" ] || uv run python scripts/retract_posterior.py \
+    --samples samples/posterior_token_bio.pt --adapter checkpoints/bio_lora \
+    --norms 6 12 25 50 81 --max-step 4 --corr-iter 10 --out "$retracted"
+
+methods="token/projected_measured token/isotropic_measured baseline/lora_ensemble"
+for n in 6 12 25 50 81; do methods="$methods token/retracted$n"; done
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples samples/posterior_token_bio.pt "$retracted" samples/baselines_bio.pt \
+    --methods $methods --out figures/bio_eval_retract.json

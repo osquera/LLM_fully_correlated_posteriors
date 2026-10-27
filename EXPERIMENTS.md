@@ -530,3 +530,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 ---
 
 ## Pending
+
+- **E22 Equal inference cost** (`22_bio_equal_cost.lsf`). 2- and 4-member
+  ensembles vs 2- and 4-sample posteriors, disjoint groups of E17's 8.
+- **E23 Curved posterior** (`23_bio_retract.lsf`, `retract_posterior.py`).
+  Predictor-corrector walk along each projected direction with L-BFGS
+  pull-back onto the fit set, saved at arc length 6-81: does it reach the
+  ensemble's distance and coverage signal while keeping the fit?
+- **E24 Top-k on the biographies** (`24_bio_topk.lsf`). Top-64/256/1024
+  subspace of the bio J^L, noise seeds 0-2: does the approximation keep the
+  E17 signal, and how much does the posterior's draw matter?
+

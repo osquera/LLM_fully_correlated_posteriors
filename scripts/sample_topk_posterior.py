@@ -12,6 +12,10 @@ measured like the exact posterior's (worst per-sequence |dNLL| reaches
 --alpha-tol of the MAP's mean NLL). Saved as methods topk<k>_measured in a
 token-mode samples file that evaluate_posterior.py / analyze_posterior.py read.
 
+--sample-seeds draws further noise seeds on the same subspace (the expensive
+part), saved as topk<k>_seed<s>_measured: a cheap check of how much a result
+depends on the posterior's draw.
+
 Also reports J^L's spectrum: the Ritz values and the share of ||J^L||_F^2
 in the top k directions, and how far each delta_k still is from the kernel
 (||J^L delta|| / ||delta||, the exact run's residual being ~0.02).
@@ -58,6 +62,8 @@ def parse_args():
     ap.add_argument("--out", default="samples/posterior_topk.pt")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--sample-seeds", type=int, nargs="*", default=[],
+                    help="extra noise seeds on the same subspace")
     return ap.parse_args()
 
 
@@ -96,27 +102,29 @@ def main():
     print(f"subspace of {ks[-1]} directions in {t_sub / 3600:.2f} h; "
           f"||J||_F^2 ~ {frob2:.4g}")
 
-    # the same eps as sample_projected_posterior at this seed
-    gen = torch.Generator(device="cpu").manual_seed(args.seed)
-    eps = torch.stack([torch.randn(space.P, generator=gen, dtype=torch.float32)
-                       for _ in range(args.n_samples)]).to(space.device, space.dtype)
-
     map_rows = per_row_losses(f_seq, theta, batches)
     tol_abs = args.alpha_tol * float(map_rows.mean())
     methods, per_k = {}, {}
-    for k in ks:
-        dirs = project_out(eps, U[:k])
-        kdim = float(space.P - k)
-        alpha, radii = measure_alpha(f_seq, theta, space, batches, dirs, kdim, tol_abs)
-        res = kernel_residuals(dirs, f, theta, space, batches)
-        methods[f"topk{k}_measured"] = (dirs / alpha ** 0.5).float().cpu()
-        per_k[k] = {"alpha": alpha, "norm": (kdim / alpha) ** 0.5,
-                    "energy_share": float(sigma2[:k].sum()) / frob2,
-                    "residual_mean": float(res.mean()), "residual_max": float(res.max()),
-                    "radii": radii}
-        print(f"  k={k:5d}: energy share {per_k[k]['energy_share']:.3f}  residual "
-              f"{per_k[k]['residual_mean']:.3f} (max {per_k[k]['residual_max']:.3f})  "
-              f"alpha {alpha:.4g}  ||delta|| ~ {per_k[k]['norm']:.3f}")
+    for seed in [args.seed] + [s for s in args.sample_seeds if s != args.seed]:
+        # the same eps as sample_projected_posterior at this seed
+        gen = torch.Generator(device="cpu").manual_seed(seed)
+        eps = torch.stack([torch.randn(space.P, generator=gen, dtype=torch.float32)
+                           for _ in range(args.n_samples)]).to(space.device, space.dtype)
+        tag = "" if seed == args.seed else f"_seed{seed}"
+        for k in ks:
+            dirs = project_out(eps, U[:k])
+            kdim = float(space.P - k)
+            alpha, radii = measure_alpha(f_seq, theta, space, batches, dirs, kdim, tol_abs)
+            res = kernel_residuals(dirs, f, theta, space, batches)
+            methods[f"topk{k}{tag}_measured"] = (dirs / alpha ** 0.5).float().cpu()
+            per_k[f"{k}{tag}"] = {"alpha": alpha, "norm": (kdim / alpha) ** 0.5,
+                                  "energy_share": float(sigma2[:k].sum()) / frob2,
+                                  "residual_mean": float(res.mean()), "residual_max": float(res.max()),
+                                  "radii": radii}
+            r = per_k[f"{k}{tag}"]
+            print(f"  k={k:5d}{tag}: energy share {r['energy_share']:.3f}  residual "
+                  f"{r['residual_mean']:.3f} (max {r['residual_max']:.3f})  "
+                  f"alpha {alpha:.4g}  ||delta|| ~ {r['norm']:.3f}")
 
     info = {"P": space.P, "loss_mode": "token", "loss_on": args.loss_on, "projector": "topk",
             "alpha_tol_nats": tol_abs, "ks": ks, "per_k": per_k, "sigma2": sigma2.tolist(),

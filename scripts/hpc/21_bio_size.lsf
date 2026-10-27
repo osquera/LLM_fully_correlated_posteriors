@@ -1,0 +1,24 @@
+#!/bin/sh
+# E17 follow-up: is the LoRA ensemble's lead on knowledge coverage a matter of
+# sample size? Re-score the existing bio posterior (‖δ‖ 2.97 at the measured
+# alpha) rescaled to ‖δ‖ 6 ... 81 (the ensemble members' distance from
+# theta_map), each with its fit cost on the corpus, next to the ensemble and
+# DropConnect; plus the held-out logistic test softmax -> softmax + MI and
+# per-probe scores. No new projection; ~1 h on an H100. Needs 18_bio.lsf's
+# outputs.
+#   bsub < scripts/hpc/21_bio_size.lsf
+#BSUB -J pb_bio_size
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_bio_size.out
+#BSUB -e logs/%J_bio_size.err
+
+. scripts/hpc/env.sh
+
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples samples/posterior_token_bio.pt samples/baselines_bio.pt \
+    --norms 6 12 25 50 81 --out figures/bio_eval_size.json

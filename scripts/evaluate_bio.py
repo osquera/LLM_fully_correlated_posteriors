@@ -17,7 +17,14 @@ whether a score knows something the softmax does not):
   unseen      f = 0 vs f >= 1
   rare        f <= 1 vs f >= 8
   wrong       MAP exact match wrong vs right, among seen people (f >= 1)
-plus Spearman rho between the score and -log2(1 + f).
+plus Spearman rho between the score and -log2(1 + f), and a held-out
+logistic regression per task (2 folds split by person): MAP entropy + 1-conf,
+with and without each method's log MI (does MI add to the softmax as a whole).
+
+--norms rescales each token-mode posterior method to these sample norms
+(``name@norm``), and every method's fit cost is reported: per-document mean
+NLL change on the corpus vs theta_map (worst, mean |.|, share over the
+sampler's tolerance). Per-probe scores go into the output for later analysis.
 
   uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json \\
       --adapter checkpoints/bio_lora --samples samples/posterior_token_bio.pt samples/baselines_bio.pt
@@ -34,7 +41,7 @@ import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from analyze_posterior import seq_index, stratified_auroc
+from analyze_posterior import logistic_gain, seq_index, stratified_auroc
 from baselines_single_pass import KNN, Mahalanobis, seq_mean, token_features
 from evaluate_posterior import auroc, evaluate_set
 from llmproj.data import encode_texts
@@ -52,6 +59,9 @@ def parse_args():
     ap.add_argument("--samples", nargs="*", default=[])
     ap.add_argument("--methods", nargs="*", default=None,
                     help="method keys (default: every *_measured one and every baseline)")
+    ap.add_argument("--norms", type=float, nargs="*", default=[],
+                    help="also evaluate token-mode posterior methods rescaled to these ||delta||")
+    ap.add_argument("--max-length", type=int, default=96, help="corpus encoding for the fit cost")
     ap.add_argument("--layers", type=int, nargs="+", default=None)
     ap.add_argument("--knn-k", type=int, default=10)
     ap.add_argument("--n-bins", type=int, default=5)
@@ -108,27 +118,38 @@ def main():
     theta, frozen = space.theta(model), space.frozen(model)
     enc = encode_probes(tokenizer, probes)
 
-    methods = {"map": torch.zeros(1, space.P)}
+    methods, tol = {"map": torch.zeros(1, space.P)}, None
     for p in args.samples:
         blob = torch.load(p, weights_only=False)
         mode = blob["info"]["loss_mode"]
+        if mode == "token":
+            tol = blob["info"]["alpha_tol_nats"]
         for m, d in blob["methods"].items():
             key = f"{mode}/{m}"
             if (args.methods and key not in args.methods) or \
                (not args.methods and not (m.endswith("_measured") or mode == "baseline")):
                 continue
             methods[key] = d.float()
+            if mode == "token":
+                for n in args.norms:
+                    methods[f"{key}@{n:g}"] = d.float() * (n / float(d.norm(dim=1).mean()))
     print(f"{len(probes)} probes; methods {list(methods)}")
 
-    scores, map_tok = {}, None
+    corpus_enc = encode_texts(tokenizer, corpus["texts"], args.max_length, loss_on="all")
+    scores, map_tok, fit, map_doc = {}, None, {}, None
     for name, d in methods.items():
         _, s, _ = evaluate_set(model, frozen, theta, space, d, enc, args.device, args.batch_size)
+        _, _, doc_nll = evaluate_set(model, frozen, theta, space, d, corpus_enc, args.device, args.batch_size)
         if name == "map":
-            map_tok = s["tok"]
+            map_tok, map_doc = s["tok"], doc_nll[0]
             scores["MAP entropy"] = per_probe(s["tok"]["entropy"], enc)
             scores["MAP 1-conf"] = per_probe(1 - s["tok"]["conf"], enc)
         else:
             scores[f"{name} MI"] = per_probe(s["tok"]["mi"], enc)
+            dn = doc_nll - map_doc
+            fit[name] = {"norm": float(d.norm(dim=1).mean()), "mean_dnll": float(dn.mean()),
+                         "worst_dnll": float(dn.abs().max()), "mean_abs_dnll": float(dn.abs().mean()),
+                         "frac_over_tol": float((dn.abs() > tol).float().mean()) if tol else None}
         print(f"  scored {name}")
     correct = per_probe(map_tok["correct"].float(), enc).eq(1).numpy()  # exact match
 
@@ -144,7 +165,8 @@ def main():
 
     strata = scores["MAP entropy"]
     groups = sorted(set(freq.tolist()))
-    report = {"per_freq": {}, "tasks": {}, "spearman": {}, "n_probes": len(probes),
+    report = {"per_freq": {}, "tasks": {}, "spearman": {}, "logistic": {}, "fit": fit,
+              "tol_nats": tol, "map_corpus_nll": float(map_doc.mean()), "n_probes": len(probes),
               "layers": layers}
     for f in groups:
         m = freq == f
@@ -164,6 +186,21 @@ def main():
                 "within_entropy": stratified_auroc(y, x, strata[keep], args.n_bins)["weighted"]}
     for k, v in scores.items():
         report["spearman"][k] = spearman(v.numpy(), -np.log2(1 + freq))
+    # does MI add to the softmax as a whole? folds split by person
+    person = {n: i for i, n in enumerate(dict.fromkeys(q["name"] for q in probes))}
+    pid = torch.tensor([person[q["name"]] for q in probes])
+    soft = torch.stack([scores["MAP entropy"], scores["MAP 1-conf"]], 1).double()
+    mi_keys = [k for k in scores if k.endswith(" MI")]
+    for t, (pos, neg) in tasks.items():
+        keep = torch.from_numpy(pos | neg)
+        y = torch.from_numpy(pos)[keep]
+        feats = {"softmax": soft[keep]}
+        for k in mi_keys:
+            lmi = scores[k].double().clamp_min(1e-12).log()[keep, None]
+            feats[f"softmax+{k}"] = torch.cat([soft[keep], lmi], 1)
+        report["logistic"][t] = {k: v["auroc"] for k, v in logistic_gain(y, feats, pid[keep]).items()}
+    report["probe_scores"] = {k: v.tolist() for k, v in scores.items()}
+    report["probe_freq"], report["probe_correct"] = freq.tolist(), correct.tolist()
 
     print("\nper training frequency: MAP exact-match accuracy and mean scores")
     keys = list(scores)
@@ -178,6 +215,17 @@ def main():
     print("\nSpearman(score, rarity):")
     for k in keys:
         print(f"  {k:40s} {report['spearman'][k]:+.3f}")
+    print("\nheld-out logistic AUROC, softmax (entropy + 1-conf) -> + log MI:")
+    for t, r in report["logistic"].items():
+        print(f"  {t}: softmax {r['softmax']:.3f}")
+        for k, v in r.items():
+            if k != "softmax":
+                print(f"    {k[8:]:40s} {v:.3f}")
+    print(f"\nfit cost on the corpus (MAP mean NLL {report['map_corpus_nll']:.4f}, tol {tol}):")
+    print(f"  {'method':40s} {'norm':>7s} {'mean dNLL':>10s} {'worst':>8s} {'over tol':>8s}")
+    for k, r in fit.items():
+        ot = f"{r['frac_over_tol']:8.3f}" if r["frac_over_tol"] is not None else "       -"
+        print(f"  {k:40s} {r['norm']:7.3g} {r['mean_dnll']:10.4f} {r['worst_dnll']:8.4f} {ot}")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

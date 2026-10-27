@@ -79,7 +79,9 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    the fit 14x and removes the collapse, but the signal still peaks at
    small ‖δ‖ (E23); and a 2-member ensemble already beats the 8-sample
    posterior (E22). The ensemble's advantage is where independent runs
-   land, not distance or inference cost. The posterior keeps an edge on
+   land, not distance or inference cost; and at equal training compute
+   (one projection ~ 200+ LoRA fine-tunes of GPU time) the gap is far
+   larger. The posterior keeps an edge on
    wrong answers (0.79 vs 0.70 within quintiles, E17/E22).
 
 ---
@@ -559,8 +561,16 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   also needs more samples to settle (2 -> 8: unseen 0.75 -> 0.86; ensemble
   0.91 -> 0.95). On errors the posterior keeps its small edge at K = 4-8
   (0.77-0.79 vs 0.70 within; logistic 0.95 vs 0.93), noisy at K = 2. The
-  remaining argument for the posterior is training cost (one fine-tune plus
-  a projection vs K fine-tunes) and keeping the fit, not inference cost.
+  matching only inference cost flatters the posterior: in training compute
+  it is far more expensive. E17's job ran 13.3 h; the projection alone took
+  45,259 s (12.6 h) for 8 samples x 1000 sweeps, while the MAP fine-tune
+  and the 8 ensemble fine-tunes plus the MAP probe check fit in the job's
+  first ~30 min (all 9 adapters existed by 08:59 for an 08:29 start), i.e.
+  ~3 min per fine-tune. One projection costs ~200-250 fine-tunes of GPU time
+  on the same H100. At equal training compute the ensemble dominates on
+  coverage; the posterior's remaining arguments are keeping the fit (it is
+  the same model on the training data, the members are not: 97% of
+  documents over tol) and its edge on errors.
 
 ## E23 Curved (retracted) posterior
 

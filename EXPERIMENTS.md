@@ -67,8 +67,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    is blind.** Synthetic biographies (E17): projected MI separates never-seen
    people 0.861 and rarely-seen facts 0.804 within MAP-entropy quintiles,
    against MAP 1-conf 0.64 / 0.67, isotropic 0.71 / 0.62 and mid-layer k-NN
-   ~0.4. But an 8-member LoRA ensemble (8 full fine-tunes, samples 27x larger)
-   does better still: 0.946 / 0.955.
+   ~0.4, and it adds to the softmax in a held-out logistic test (unseen
+   0.864 -> 0.909, rare 0.900 -> 0.933). But an 8-member LoRA ensemble
+   (8 full fine-tunes) does better still: 0.946 / 0.955 within quintiles,
+   0.975 / 0.976 logistic. Not a size effect: scaled up to the ensemble's
+   distance the linear posterior breaks the fit and loses the signal, while
+   the ensemble members still fit the corpus as well as theta_map (E21).
+   The good-solution set is curved; the posterior only sees its tangent.
 
 ---
 
@@ -479,11 +484,49 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   Within-quintile AUROC conditions on entropy only; a logistic softmax + MI
   test needs per-probe scores (not saved). "wrong" has 42 positives.
 
+## E21 Bio posterior size sweep, fit cost, logistic test
+
+- **Date / job.** 2026-10-27; `21_bio_size.lsf` (8ccd65e, H100). The E17
+  samples rescaled from the measured ‖δ‖ 2.97 to 6 / 12 / 25 / 50 / 81 (81 =
+  the ensemble members' distance from theta_map); fit cost = per-document
+  mean NLL change on the corpus vs theta_map (MAP 0.105, tol 0.00105);
+  held-out logistic regression, 2 folds split by person, softmax = MAP
+  entropy + 1-conf, plus log MI.
+- **Results.** Within-entropy-quintile AUROC (unseen / rare / wrong) and fit:
+
+  | method | ‖δ‖ | unseen | rare | wrong | corpus mean dNLL | worst | docs over tol |
+  |---|---|---|---|---|---|---|---|
+  | projected | 2.97 | 0.861 | 0.804 | 0.793 | 0.0000 | 0.001 | 0% |
+  | projected | 6 | 0.857 | 0.802 | 0.790 | 0.0001 | 0.004 | 4% |
+  | projected | 12 | 0.847 | 0.800 | 0.789 | 0.0005 | 0.017 | 38% |
+  | projected | 25 | 0.788 | 0.792 | 0.764 | 0.004 | 0.073 | 88% |
+  | projected | 50 | 0.602 | 0.623 | 0.443 | 0.137 | 0.475 | 100% |
+  | projected | 81 | 0.426 | 0.353 | 0.363 | 0.752 | 1.731 | 100% |
+  | isotropic | 2.98 | 0.706 | 0.615 | 0.767 | 0.0001 | 0.038 | 43% |
+  | isotropic | 25 | 0.601 | 0.586 | 0.568 | 0.028 | 0.550 | 97% |
+  | isotropic | 81 | 0.396 | 0.335 | 0.353 | 1.195 | 2.814 | 100% |
+  | LoRA ensemble | 80.9 | **0.946** | **0.955** | 0.697 | 0.0001 | 0.267 | 97% |
+  | DropConnect | 19.1 | 0.636 | 0.666 | 0.655 | 0.004 | 0.517 | 89% |
+
+  Held-out logistic AUROC, softmax -> + log MI: unseen 0.864 -> **0.909**
+  (projected) / 0.878 (isotropic) / **0.975** (ensemble); rare 0.900 ->
+  0.933 / 0.906 / **0.976**; wrong 0.935 -> **0.952** / 0.946 / 0.932.
+  Projected flat up to ‖δ‖ 12-25 (0.909 -> 0.902), down at 50-81 (0.84-0.85).
+- **Showed.** The ensemble's lead is **not a sample-size effect**. The
+  posterior's ranking is scale-free while it stays linear (‖δ‖ 3-12), then
+  collapses once the samples leave the region where the linearisation holds:
+  at the ensemble's distance the projected samples raise the corpus NLL by
+  0.75 nats (7x the MAP's), while the ensemble members, just as far away,
+  fit it as well as theta_map on average (mean dNLL 0.0001). The ensemble
+  samples the *curved* set of good solutions; the projected posterior only
+  its tangent at theta_map. Within that tangent, MI is a real addition to
+  the softmax (held-out +0.045 / +0.033 on coverage, and for the first time
+  on errors, +0.017, 42 positives) and beats equal-size noise throughout.
+- **Next.** Follow the curved set: take a kernel step, then pull back onto
+  the zero-loss-change set with a few Gauss-Newton or short fine-tune
+  corrections, and re-linearise (a retraction). That would give samples at
+  ensemble-like distances that still keep the fit.
+
 ---
 
 ## Pending
-
-- **E17 follow-ups.** (a) Size: rescale the bio posterior to ‖δ‖ 3 -> 80
-  (the ensemble's), with the corpus NLL change at each size: is the
-  ensemble's lead a matter of sample size? (b) Save per-probe scores and test
-  MI beyond entropy and confidence jointly (logistic, as E18).

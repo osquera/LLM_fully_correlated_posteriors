@@ -35,7 +35,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Current picture
 
-*(as of 2026-10-26; update when an entry changes it)*
+*(as of 2026-10-27; update when an entry changes it)*
 
 1. **Keeps the fit.** At matched sample norm the token-projected posterior
    leaves training and test NLL at the MAP's and breaks the tolerance on 1.8%
@@ -62,7 +62,9 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 6. **The constraints are low-rank, and the OOD signal is in the top
    directions.** 2048 of ~14.7k directions carry 96% of J^L's energy and
    recover 94-100% of the exact posterior's OOD AUROCs; held-out safety at a
-   given sample size needs the tail (E16). Encouraging for scaling up.
+   given sample size needs the tail (E16). But knowledge coverage lives in
+   the tail: on the biographies top-1024 (93% of the energy) falls to the
+   isotropic level (E24). Top-k scales input-novelty detection, not this.
 7. **It knows which facts the training data supports, where input distance
    is blind.** Synthetic biographies (E17): projected MI separates never-seen
    people 0.861 and rarely-seen facts 0.804 within MAP-entropy quintiles,
@@ -73,7 +75,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    0.975 / 0.976 logistic. Not a size effect: scaled up to the ensemble's
    distance the linear posterior breaks the fit and loses the signal, while
    the ensemble members still fit the corpus as well as theta_map (E21).
-   The good-solution set is curved; the posterior only sees its tangent.
+   Pulling the samples back onto the fit set (a curved posterior) repairs
+   the fit 14x and removes the collapse, but the signal still peaks at
+   small ‖δ‖ (E23); and a 2-member ensemble already beats the 8-sample
+   posterior (E22). The ensemble's advantage is where independent runs
+   land, not distance or inference cost. The posterior keeps an edge on
+   wrong answers (0.79 vs 0.70 within quintiles, E17/E22).
 
 ---
 
@@ -529,15 +536,101 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ---
 
+## E22 Knowledge coverage at equal inference cost
+
+- **Date / job.** 2026-10-27; `22_bio_equal_cost.lsf` (20f5300, H100, 5 min).
+  E17's 8 ensemble members and 8 projected samples split into disjoint
+  groups of K = 2 (4 groups) and K = 4 (2 groups); mean ± std over groups.
+- **Results.** Within-entropy-quintile AUROC / held-out logistic (softmax +
+  log MI):
+
+  | method | K | unseen | rare | wrong |
+  |---|---|---|---|---|
+  | LoRA ensemble | 2 | 0.908 ± 0.031 / 0.943 | 0.901 ± 0.013 / 0.952 | 0.682 ± 0.038 / 0.928 |
+  | LoRA ensemble | 4 | 0.935 ± 0.001 / 0.963 | 0.936 ± 0.003 / 0.968 | 0.696 ± 0.056 / 0.931 |
+  | LoRA ensemble | 8 | 0.946 / 0.975 | 0.955 / 0.976 | 0.697 / 0.932 |
+  | projected | 2 | 0.746 ± 0.033 / 0.885 | 0.738 ± 0.030 / 0.917 | 0.670 ± 0.122 / 0.936 |
+  | projected | 4 | 0.829 ± 0.010 / 0.902 | 0.787 ± 0.023 / 0.929 | 0.769 ± 0.049 / 0.949 |
+  | projected | 8 | 0.861 / 0.909 | 0.804 / 0.933 | 0.793 / 0.952 |
+
+  (logistic std over groups <= 0.02.)
+- **Showed.** On coverage the ensemble wins at every equal inference cost:
+  a 2-member ensemble beats the full 8-sample posterior. The posterior's MI
+  also needs more samples to settle (2 -> 8: unseen 0.75 -> 0.86; ensemble
+  0.91 -> 0.95). On errors the posterior keeps its small edge at K = 4-8
+  (0.77-0.79 vs 0.70 within; logistic 0.95 vs 0.93), noisy at K = 2. The
+  remaining argument for the posterior is training cost (one fine-tune plus
+  a projection vs K fine-tunes) and keeping the fit, not inference cost.
+
+## E23 Curved (retracted) posterior
+
+- **Date / job.** 2026-10-27; `23_bio_retract.lsf` (20f5300, H100; retraction
+  5.3 h for 8 samples). Each E17 projected direction u walked out in steps
+  of <= 4, each followed by 10 L-BFGS iterations on mean_t (l_t - l_t^MAP)^2
+  over the corpus tokens; saved at arc length 6 / 12 / 25 / 50 / 81.
+- **Results.** Fit (mean / worst per-document dNLL, docs over tol) and
+  within-entropy AUROC, retracted vs the linear rescaling of E21 at the same
+  ‖δ‖:
+
+  | ‖δ‖ | fit retracted | fit linear (E21) | unseen ret / lin | rare ret / lin | wrong ret / lin |
+  |---|---|---|---|---|---|
+  | 2.97 | (exact) 0.0000 / 0.001 / 0% | | 0.861 | 0.804 | 0.793 |
+  | 6 | 0.0000 / 0.001 / 0% | 0.0001 / 0.004 / 4% | 0.860 / 0.857 | 0.803 / 0.802 | 0.788 / 0.790 |
+  | 12 | 0.0002 / 0.002 / 2% | 0.0005 / 0.017 / 38% | 0.855 / 0.847 | 0.801 / 0.800 | 0.775 / 0.789 |
+  | 25 | 0.0010 / 0.010 / 54% | 0.004 / 0.073 / 88% | 0.816 / 0.788 | 0.801 / 0.792 | 0.754 / 0.764 |
+  | 50 | 0.0089 / 0.062 / 94% | 0.137 / 0.475 / 100% | 0.790 / 0.602 | 0.799 / 0.623 | 0.665 / 0.443 |
+  | 81 | 0.0548 / 0.212 / 100% | 0.752 / 1.731 / 100% | 0.734 / 0.426 | 0.815 / 0.353 | 0.458 / 0.363 |
+  | ensemble 81 | 0.0001 / 0.267 / 97% | | 0.946 | 0.955 | 0.697 |
+
+  Held-out logistic unseen: 0.909 (<= 25) -> 0.901 (50) -> 0.871 (81).
+  cos(δ, u) = 1.000 at every arc length: the corrections are tiny next to ‖δ‖.
+- **Showed.** The pull-back works as a fit repair: it cuts the corpus NLL
+  increase 14x at ‖δ‖ 81 (0.75 -> 0.055 nats) and removes E21's collapse
+  (unseen 0.43 -> 0.73, rare 0.35 -> 0.82). But it never beats the small
+  posterior: the signal is best at ‖δ‖ 3-12 and decays with distance, and
+  stays far below the ensemble at the ensemble's distance. Two differences
+  remain. The retracted samples still fit worse on average (+0.055 nats, a
+  +52% bias on the MAP NLL) while the ensemble members are unbiased (mean
+  0.0001, with per-document changes of both signs, 97% over tol). And the
+  retracted samples point along u, a kernel direction at theta_map, while
+  the ensemble's directions come from independent training runs. So the
+  E21 reading "the posterior only sees the tangent" is incomplete: following
+  the curve with this corrector does not recover the ensemble's diversity.
+  What makes the ensemble disagree on unseen facts is where its members
+  land, not how far they are from theta_map.
+
+## E24 Top-k posterior on the biographies, noise seeds
+
+- **Date / job.** 2026-10-27; `24_bio_topk.lsf` (20f5300, H100, 5.3 h;
+  subspace 3.5 h). Top-1024 right singular directions of the bio J^L (68k
+  rows, 3 subspace iterations), samples restricted to the complement of the
+  top k, measured alpha; noise seeds 0 (E17's noise), 1, 2.
+- **Results.** Energy share 0.51 / 0.73 / 0.93 at k = 64 / 256 / 1024; the
+  measured alpha gives ‖δ‖ 0.35-1.35, all docs within tol. Within-entropy
+  AUROC (seed 0 / 1 / 2):
+
+  | method | unseen | rare | wrong | logistic unseen |
+  |---|---|---|---|---|
+  | exact projected | 0.861 | 0.804 | 0.793 | 0.909 |
+  | top-64 | 0.709 / 0.718 / 0.663 | 0.653 / 0.603 / 0.623 | 0.727 / 0.749 / 0.747 | 0.874-0.878 |
+  | top-256 | 0.714 / 0.707 / 0.689 | 0.701 / 0.646 / 0.646 | 0.706 / 0.744 / 0.745 | 0.876-0.880 |
+  | top-1024 | 0.727 / 0.707 / 0.698 | 0.722 / 0.695 / 0.705 | 0.717 / 0.772 / 0.746 | 0.879-0.881 |
+  | isotropic | 0.706 | 0.615 | 0.767 | 0.878 |
+
+- **Showed.** Unlike Alpaca OOD (E16, top-2048 kept 94-100%), top-k keeps
+  little of the coverage signal: at k = 1024 (93% of the energy) unseen is
+  at the isotropic level and rare recovers only ~half the exact posterior's
+  gain over isotropic. The facts seen once or twice give small-gradient
+  constraints in the spectrum's tail; a top-k posterior leaves exactly those
+  free, so rarely-seen facts look like unseen ones. Input novelty lives in
+  the top directions, knowledge coverage in the tail, so this use needs
+  the full projection (or a much larger k). Seed spread: within-quintile
+  AUROC moves by up to 0.05 between noise draws at 8 samples (logistic
+  <= 0.006), the same size as E22's group std; differences below ~0.05
+  within quintiles are within noise.
+
+---
+
 ## Pending
 
-- **E22 Equal inference cost** (`22_bio_equal_cost.lsf`). 2- and 4-member
-  ensembles vs 2- and 4-sample posteriors, disjoint groups of E17's 8.
-- **E23 Curved posterior** (`23_bio_retract.lsf`, `retract_posterior.py`).
-  Predictor-corrector walk along each projected direction with L-BFGS
-  pull-back onto the fit set, saved at arc length 6-81: does it reach the
-  ensemble's distance and coverage signal while keeping the fit?
-- **E24 Top-k on the biographies** (`24_bio_topk.lsf`). Top-64/256/1024
-  subspace of the bio J^L, noise seeds 0-2: does the approximation keep the
-  E17 signal, and how much does the posterior's draw matter?
-
+- Nothing queued.

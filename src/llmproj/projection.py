@@ -22,6 +22,7 @@ Differences from the reference JAX implementation, all deliberate:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -203,6 +204,7 @@ def project_vectors(
     tol: float | None = None,
     check_every: int = 25,
     progress: bool = False,
+    callback: Callable[[int, Callable[[], torch.Tensor]], None] | None = None,
 ) -> torch.Tensor:
     """`project_vector` for the K rows of V (K, P) together.
 
@@ -210,6 +212,9 @@ def project_vectors(
     the work of the one-vector version, for the same result: each row gets
     exactly the sweeps, acceleration steps and early stop it would get alone
     (a row stops being updated once its own residual is below ``tol``).
+
+    callback(k, current) is called after sweep k (1-based); ``current()``
+    returns the projection so far (snapshots of the cost curve).
     """
     V = V.clone()
     active = torch.ones(V.shape[0], dtype=torch.bool, device=V.device)
@@ -231,6 +236,8 @@ def project_vectors(
                             torch.ones_like(dd))
             A = t[:, None] * A + (1.0 - t[:, None]) * A_start
         V[idx] = A
+        if callback is not None:
+            callback(k + 1, lambda: V.clone())
         if tol is not None and (k + 1) % check_every == 0:
             res = kernel_residuals(A, f, theta, space, batches)
             if progress:
@@ -272,6 +279,80 @@ def project_vector(
     )[0]
 
 
+def project_vectors_pcg(
+    V: torch.Tensor,
+    f: Callable,
+    theta: dict[str, torch.Tensor],
+    space: ParamSpace,
+    batches: Sequence[dict[str, torch.Tensor]],
+    factors: Sequence[BatchFactor],
+    n_iterations: int = 100,
+    tol: float | None = None,
+    progress: bool = False,
+    callback: Callable[[int, Callable[[], torch.Tensor]], None] | None = None,
+) -> torch.Tensor:
+    """(I - P(J^T J)) V^T by preconditioned conjugate gradients, K rows at once.
+
+    The projection is V - J^T x with (J J^T) x = J V: a linear system in the
+    (small) row space. CG solves it with one J J^T product per iteration, i.e.
+    one VJP and one JVP per batch, the same passes as one alternating sweep.
+    The preconditioner is block Jacobi with the per-batch (J_b J_b^T)^+ the
+    alternating projections already use: alternating projections are block
+    Gauss-Seidel on this system, so this is its Krylov-accelerated relative,
+    with sqrt(condition number) convergence instead of linear-rate sweeps.
+
+    The CG residual r = J V - J J^T x = J (V - J^T x) is the kernel residual's
+    numerator, so ``tol`` (||J v|| / ||v|| for every row) costs nothing to check.
+    """
+    K = V.shape[0]
+    fbs = [lambda p, b=b: f(p, b) for b in batches]
+
+    def precond(rs):
+        return [((r @ fa.eigvecs) * fa.inv_eigvals) @ fa.eigvecs.T for r, fa in zip(rs, factors)]
+
+    def jt(xs):  # J^T x, (K, P)
+        out = torch.zeros_like(V)
+        for fb, x in zip(fbs, xs):
+            _, vjp_fn = vjp(fb, theta)
+            out += _vjps(vjp_fn, space, x)
+        return out
+
+    def dot(a, b):  # per-row inner product over all batches, (K,) in float64
+        return sum((x.double() * y.double()).sum(1) for x, y in zip(a, b))
+
+    with torch.no_grad():
+        r = [_jvps(fb, theta, space, V) for fb in fbs]
+    x = [torch.zeros_like(ri) for ri in r]
+    z = precond(r)
+    p = [zi.clone() for zi in z]
+    rz = dot(r, z)
+    vnorm = V.double().norm(dim=1)
+    it = tqdm(range(n_iterations), desc="project (pcg)", disable=not progress, leave=False)
+    for k in it:
+        u = jt(p)
+        with torch.no_grad():
+            q = [_jvps(fb, theta, space, u) for fb in fbs]
+        pq = dot(p, q)
+        a = torch.where(pq > 0, rz / pq.clamp_min(1e-300), torch.zeros_like(pq))
+        a_ = a.to(V.dtype)[:, None]
+        x = [xi + a_ * pi for xi, pi in zip(x, p)]
+        r = [ri - a_ * qi for ri, qi in zip(r, q)]
+        z = precond(r)
+        rz_new = dot(r, z)
+        beta = torch.where(rz > 0, rz_new / rz.clamp_min(1e-300), torch.zeros_like(rz))
+        b_ = beta.to(V.dtype)[:, None]
+        p = [zi + b_ * pi for zi, pi in zip(z, p)]
+        rz = rz_new
+        res = dot(r, r).sqrt() / vnorm
+        if progress:
+            it.set_postfix(residual=f"{float(res.max()):.2e}")
+        if callback is not None:
+            callback(k + 1, lambda: V - jt(x))
+        if tol is not None and bool((res < tol).all()):
+            break
+    return V - jt(x)
+
+
 def sample_projected_posterior(
     f: Callable,
     theta: dict[str, torch.Tensor],
@@ -288,6 +369,8 @@ def sample_projected_posterior(
     progress: bool = True,
     vec_batch: int | None = None,
     row_batch: int = 16,
+    solver: str = "alternating",
+    snapshots: Sequence[int] = (),
 ):
     """Draw ``n_samples`` from q(theta) = N(theta_map, alpha^-1 U_L U_L^T).
 
@@ -299,6 +382,11 @@ def sample_projected_posterior(
         vmapped passes run out of memory. The draws, and so the result, do not
         depend on it.
     row_batch: rows of J J^T formed together in the precompute.
+    solver: "alternating" (sweeps, Lemma 4.1) or "pcg" (`project_vectors_pcg`);
+        n_iterations counts sweeps or CG iterations, which cost the same passes.
+    snapshots: iteration counts at which to also keep the projection so far:
+        info["snapshots"][n] = {"pv": (n_samples, P) at alpha = 1 on the CPU,
+        "seconds": projection time up to n, without the snapshotting}.
     """
     if factors is None:
         factors = precompute_batch_pinv(f, theta, space, batches, rtol=rtol,
@@ -309,12 +397,29 @@ def sample_projected_posterior(
     eps = torch.stack([torch.randn(space.P, generator=gen, dtype=torch.float32)
                        for _ in range(n_samples)]).to(device=space.device, dtype=space.dtype)
     k = vec_batch or n_samples
-    pv = torch.cat([
-        project_vectors(eps[i:i + k], f, theta, space, batches, factors,
-                        n_iterations=n_iterations, acceleration=acceleration, tol=tol,
-                        progress=progress)
-        for i in tqdm(range(0, n_samples, k), desc="sampling", disable=not progress)
-    ])
+    snaps = {n: {"pv": [], "seconds": 0.0} for n in snapshots}
+    chunks = []
+    for i in tqdm(range(0, n_samples, k), desc="sampling", disable=not progress):
+        t0, paused = time.perf_counter(), 0.0
+
+        def keep(n, current):
+            nonlocal paused
+            if n in snaps:
+                t = time.perf_counter()
+                with torch.no_grad():
+                    snaps[n]["pv"].append(current().cpu())
+                snaps[n]["seconds"] += t - t0 - paused
+                paused += time.perf_counter() - t
+
+        kw = dict(n_iterations=n_iterations, tol=tol, progress=progress,
+                  callback=keep if snaps else None)
+        if solver == "pcg":
+            chunks.append(project_vectors_pcg(eps[i:i + k], f, theta, space, batches,
+                                              factors, **kw))
+        else:
+            chunks.append(project_vectors(eps[i:i + k], f, theta, space, batches, factors,
+                                          acceleration=acceleration, **kw))
+    pv = torch.cat(chunks)
     # <eps, P eps> is an unbiased Hutchinson estimate of Tr(U_L U_L^T),
     # i.e. of the kernel dimension (paper Lemma 3.4).
     trace_terms = (eps.float() * pv.float()).sum(1).tolist()
@@ -329,5 +434,12 @@ def sample_projected_posterior(
         "P": space.P,
         "alpha": alpha,
         "n_iterations": n_iterations,
+        "solver": solver,
     }
+    if snaps:
+        missing = [n for n, sn in snaps.items() if sum(t.shape[0] for t in sn["pv"]) < n_samples]
+        if missing:  # an early stop (tol) came first
+            print(f"snapshots {missing} not reached (stopped early); dropped")
+        info["snapshots"] = {n: {"pv": torch.cat(sn["pv"]), "seconds": sn["seconds"]}
+                             for n, sn in snaps.items() if n not in missing}
     return deltas, info

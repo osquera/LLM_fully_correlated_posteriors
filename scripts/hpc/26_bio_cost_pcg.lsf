@@ -1,0 +1,33 @@
+#!/bin/sh
+# Cost curve, pcg: knowledge-coverage AUROC against training GPU time.
+# E17's bio posterior recomputed with block-Jacobi preconditioned CG
+# (projection.project_vectors_pcg), stopped after 10 / 25 / 50 / 100 / 250
+# iterations; each costs the passes of one alternating sweep.
+# Each snapshot gets its own measured alpha, then E17's evaluation next to the
+# LoRA ensemble in disjoint groups of 2 / 3 / 4 members. ~5 h on an H100.
+# Needs 18_bio.lsf's outputs.
+#   bsub < scripts/hpc/26_bio_cost_pcg.lsf
+#BSUB -J pb_cost_pcg
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_cost_pcg.out
+#BSUB -e logs/%J_cost_pcg.err
+
+. scripts/hpc/env.sh
+
+samples=samples/posterior_bio_pcg.pt
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset data/bio/corpus.json --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --solver pcg --n-iterations 250 --snapshots 10 25 50 100 250 \
+    --alpha-tol 0.01 --adapter checkpoints/bio_lora --out "$samples"
+
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples "$samples" samples/baselines_bio.pt \
+    --methods token/isotropic_measured baseline/lora_ensemble token/projected_pcg10_measured token/projected_pcg25_measured token/projected_pcg50_measured token/projected_pcg100_measured token/projected_pcg250_measured \
+    --subsets 2 3 4 --subset-methods baseline/lora_ensemble \
+    --out figures/bio_eval_cost_pcg.json

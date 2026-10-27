@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import torch
@@ -90,6 +91,7 @@ def main():
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr)
 
     model.train()
+    t0 = time.perf_counter()
     for epoch in range(args.epochs):
         total, n = 0.0, 0
         for ids, mask, loss_mask in tqdm(loader, desc=f"epoch {epoch}"):
@@ -110,7 +112,10 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(outdir)
     tokenizer.save_pretrained(outdir)
-    (outdir / "run.json").write_text(json.dumps(vars(args), indent=2))
+    train_seconds = time.perf_counter() - t0
+    print(f"trained in {train_seconds:.0f}s")
+    (outdir / "run.json").write_text(json.dumps({**vars(args), "train_seconds": train_seconds},
+                                                indent=2))
     print(f"saved theta_map to {outdir}")
 
 

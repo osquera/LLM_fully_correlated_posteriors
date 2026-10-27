@@ -74,7 +74,15 @@ def parse_args():
     ap.add_argument("--max-gb", type=float, default=8.0, help="dense J^L budget for --projector auto")
     ap.add_argument("--n-samples", type=int, default=16)
     ap.add_argument("--n-iterations", type=int, default=500)
-    ap.add_argument("--tol", type=float, default=1e-3, help="early-stop kernel residual")
+    ap.add_argument("--solver", choices=["alternating", "pcg"], default="alternating",
+                    help="iterative projector: sweeps of alternating projections, or "
+                         "block-Jacobi preconditioned CG (same passes per iteration)")
+    ap.add_argument("--snapshots", type=int, nargs="*", default=[],
+                    help="also save the projection after these many iterations, each with "
+                         "its own measured alpha, as projected_<solver><n>_measured (the "
+                         "cost curve); implies no early stop")
+    ap.add_argument("--tol", type=float, default=1e-3,
+                    help="early-stop kernel residual (0: never stop early)")
     ap.add_argument("--rtol", type=float, default=1e-6, help="relative eigenvalue cutoff")
     ap.add_argument("--no-acceleration", action="store_true")
     ap.add_argument("--vec-batch", type=int, default=None,
@@ -163,8 +171,10 @@ def main():
             f, theta, space, batches,
             n_samples=args.n_samples, alpha=1.0,
             n_iterations=args.n_iterations, rtol=args.rtol,
-            acceleration=not args.no_acceleration, tol=args.tol, seed=args.seed,
+            acceleration=not args.no_acceleration,
+            tol=None if args.snapshots or args.tol <= 0 else args.tol, seed=args.seed,
             vec_batch=args.vec_batch, row_batch=args.row_batch,
+            solver=args.solver, snapshots=args.snapshots,
         )
         # Hutchinson over the samples themselves; std sqrt(2 kdim / n_samples)
         kdim, n_probes = float(info["kernel_dim_est"]), args.n_samples
@@ -207,6 +217,22 @@ def main():
             J, a, args.n_samples, seed=args.seed + 2)
         methods["lla_measured"] = linearized_laplace_samples(
             J, a, args.n_samples, seed=args.seed + 3, rtol=args.rtol)
+
+    # ---- cost curve: the projection after fewer iterations, each with its
+    # own measured alpha (a less converged projection leaks more fit) ----
+    snap_info = {}
+    for n, sn in sorted(info.pop("snapshots", {}).items()):
+        spv = sn["pv"].to(pv.dtype)
+        res = max(kernel_residual(v.to(space.device, space.dtype), f, theta, space, batches)
+                  for v in spv)
+        a_n, radii_n = measure_alpha(f_seq, theta, space, batches, spv[:k], kdim, tol_abs)
+        methods[f"projected_{args.solver}{n}_measured"] = spv / a_n**0.5
+        snap_info[n] = {"seconds": sn["seconds"], "kernel_residual_max": res, "alpha": a_n,
+                        "radii": radii_n}
+        print(f"snapshot {args.solver} {n:5d}: {sn['seconds'] / 3600:.2f} h, residual "
+              f"{res:.2e}, alpha {a_n:.4e} => ||delta|| ~ {(kdim / a_n) ** 0.5:.4g}")
+    if snap_info:
+        info["snapshots"] = snap_info
 
     norms = {m: float(d.norm(dim=1).mean()) for m, d in methods.items()}
     print("\nmean sample norm per method:")

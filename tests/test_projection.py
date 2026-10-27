@@ -353,3 +353,48 @@ def test_top_singular_subspace_matches_dense_svd():
     Vh = torch.linalg.svd(J, full_matrices=False).Vh
     exact = eps - (eps @ Vh.T) @ Vh
     assert torch.allclose(project_out(eps, full["U"]), exact, atol=1e-8)
+
+
+def test_pcg_converges_to_exact_projector_and_matches_snapshots():
+    """PCG must reach the same projector as alternating projections, in far
+    fewer iterations, and its snapshots must be the iterates themselves."""
+    from llmproj.projection import kernel_residuals, project_vectors, project_vectors_pcg
+    _, space, theta, f, batches = _toy()
+    JL = _dense_jacobian(f, theta, space, batches)
+    _, sv, Vh = torch.linalg.svd(JL, full_matrices=False)
+    Vk = Vh[: int((sv > 1e-10 * sv.max()).sum())]
+    factors = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    gen = torch.Generator().manual_seed(4)
+    V = torch.randn(3, space.P, generator=gen, dtype=space.dtype)
+    exact = V - (V @ Vk.T) @ Vk
+
+    # cond(J J^T) ~ 1e5 here, so CG needs more than rank = 40 iterations in
+    # floating point; alternating projections are still at ~1e-1 after 100
+    err = lambda W: float((W - exact).norm() / exact.norm())  # noqa: E731
+    assert err(project_vectors_pcg(V, f, theta, space, batches, factors,
+                                   n_iterations=150)) < 1e-8
+    pcg = project_vectors_pcg(V, f, theta, space, batches, factors, n_iterations=100)
+    alt = project_vectors(V, f, theta, space, batches, factors, n_iterations=100)
+    assert err(pcg) < 1e-3 * err(alt), (err(pcg), err(alt))
+    assert (kernel_residuals(pcg, f, theta, space, batches)
+            < kernel_residuals(alt, f, theta, space, batches)).all()
+
+    seen = {}
+    project_vectors_pcg(V, f, theta, space, batches, factors, n_iterations=10,
+                        callback=lambda k, cur: seen.__setitem__(k, cur()))
+    ten = project_vectors_pcg(V, f, theta, space, batches, factors, n_iterations=10)
+    assert sorted(seen) == list(range(1, 11))
+    assert torch.allclose(seen[10], ten, rtol=1e-10, atol=1e-12)
+
+
+def test_sampler_snapshots_equal_shorter_runs():
+    _, space, theta, f, batches = _toy()
+    factors = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    for solver in ("alternating", "pcg"):
+        kw = dict(n_samples=4, alpha=1.0, tol=None, seed=3, factors=factors, progress=False,
+                  solver=solver, vec_batch=3)
+        _, info = sample_projected_posterior(f, theta, space, batches, n_iterations=20,
+                                             snapshots=(5, 20), **kw)
+        short, _ = sample_projected_posterior(f, theta, space, batches, n_iterations=5, **kw)
+        assert torch.allclose(info["snapshots"][5]["pv"], short, rtol=1e-9, atol=1e-10)
+        assert info["snapshots"][20]["seconds"] >= info["snapshots"][5]["seconds"] > 0

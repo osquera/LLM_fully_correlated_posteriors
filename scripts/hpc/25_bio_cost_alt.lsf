@@ -1,0 +1,43 @@
+#!/bin/sh
+# Cost curve, alternating: knowledge-coverage AUROC against training GPU time.
+# E17's bio posterior recomputed with alternating projections (as in E17),
+# stopped after 25 / 50 / 100 / 250 sweeps (E17: 1000); plus one timed
+# fine-tune for the ensemble side of the axis.
+# Each snapshot gets its own measured alpha, then E17's evaluation next to the
+# LoRA ensemble in disjoint groups of 2 / 3 / 4 members. ~5 h on an H100.
+# Needs 18_bio.lsf's outputs.
+#   bsub < scripts/hpc/25_bio_cost_alt.lsf
+#BSUB -J pb_cost_alt
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_cost_alt.out
+#BSUB -e logs/%J_cost_alt.err
+
+. scripts/hpc/env.sh
+
+# one more fine-tune, timed (run.json train_seconds), for the ensemble side of
+# the cost axis on the same GPU type
+t0=$(date +%s)
+[ -f checkpoints/bio_lora_ens9/run.json ] || uv run python scripts/finetune_lora.py \
+    --model HuggingFaceTB/SmolLM2-135M --dataset data/bio/corpus.json --split train \
+    --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+    --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+    --seed 9 --out checkpoints/bio_lora_ens9
+echo "fine-tune wall time incl. model load: $(( $(date +%s) - t0 )) s"
+
+samples=samples/posterior_bio_alt.pt
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset data/bio/corpus.json --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --solver alternating --n-iterations 250 --snapshots 25 50 100 250 \
+    --alpha-tol 0.01 --adapter checkpoints/bio_lora --out "$samples"
+
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples "$samples" samples/baselines_bio.pt \
+    --methods token/isotropic_measured baseline/lora_ensemble token/projected_alternating25_measured token/projected_alternating50_measured token/projected_alternating100_measured token/projected_alternating250_measured \
+    --subsets 2 3 4 --subset-methods baseline/lora_ensemble \
+    --out figures/bio_eval_cost_alt.json

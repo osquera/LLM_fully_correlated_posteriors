@@ -63,8 +63,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    directions.** 2048 of ~14.7k directions carry 96% of J^L's energy and
    recover 94-100% of the exact posterior's OOD AUROCs; held-out safety at a
    given sample size needs the tail (E16). Encouraging for scaling up.
-7. **Open:** whether the posterior catches what k-NN cannot: unknown facts on
-   normal-looking questions (E17).
+7. **It knows which facts the training data supports, where input distance
+   is blind.** Synthetic biographies (E17): projected MI separates never-seen
+   people 0.861 and rarely-seen facts 0.804 within MAP-entropy quintiles,
+   against MAP 1-conf 0.64 / 0.67, isotropic 0.71 / 0.62 and mid-layer k-NN
+   ~0.4. But an 8-member LoRA ensemble (8 full fine-tunes, samples 27x larger)
+   does better still: 0.946 / 0.955.
 
 ---
 
@@ -430,24 +434,56 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   win. Correction to an earlier guess: within a set MI tracks the MAP's
   entropy (and the gradient-curvature product), not input distance.
 
+## E17 Knowledge coverage: synthetic biographies
+
+- **Date / job.** 2026-10-26/27; `18_bio.lsf` (H100, 13.3 h; projection
+  11.9 h). 240 fictional people x 4 facts, f = 0/1/2/4/8/16 training
+  biographies per person (40 people each; never-seen names recombined from
+  seen first and last names); 1,240 documents, 59k tokens. LoRA r = 8 on q/v
+  + MLP (P = 1.98M), 20 epochs. Token-mode posterior on the whole corpus:
+  68k J^L rows, 8 samples x 1000 sweeps, residual 2.6e-3; measured alpha at
+  1% of the MAP NLL (0.105 -> tol 0.00105 nats) gives ‖δ‖ = 2.97. Baselines:
+  isotropic at the same norm, 8-member LoRA ensemble (seeds 1-8, members
+  ‖δ‖ ~81 from theta_map), DropConnect p = 0.1 (‖δ‖ 19). 960 cloze probes,
+  teacher-forced on the true answer, mean over answer tokens.
+- **MAP precondition.** Exact-match accuracy f = 0..16: 3.7 / 85.6 / 92.5 /
+  96.9 / 99.4 / 99.4%; confidence 86% on never-seen people (**confident
+  hallucination**); mean answer entropy 0.45 -> 0.02.
+- **Results** (AUROC raw / within MAP-entropy quintiles; Spearman with
+  rarity -log2(1+f)):
+
+  | score | unseen (f=0 vs >=1) | rare (f<=1 vs >=8) | wrong (42 vs 758) | Spearman |
+  |---|---|---|---|---|
+  | MAP entropy | 0.859 / 0.598 | 0.900 / 0.659 | 0.918 / 0.708 | 0.628 |
+  | MAP 1-conf | 0.865 / 0.637 | 0.904 / 0.669 | 0.939 / **0.822** | 0.638 |
+  | **projected MI** | 0.907 / **0.861** | 0.934 / **0.804** | 0.941 / 0.793 | 0.698 |
+  | isotropic MI | 0.879 / 0.706 | 0.904 / 0.615 | 0.930 / 0.767 | 0.648 |
+  | LoRA ensemble MI | **0.975 / 0.946** | **0.974 / 0.955** | 0.861 / 0.697 | **0.810** |
+  | DropConnect MI | 0.874 / 0.636 | 0.912 / 0.666 | 0.905 / 0.655 | 0.650 |
+  | k-NN / Mahalanobis L15 | 0.51 / 0.39, 0.48 / 0.44 | 0.50 / 0.35, 0.47 / 0.38 | 0.52 / 0.34, 0.54 / 0.45 | ~0 |
+  | k-NN L30 | 0.602 / 0.513 | 0.777 / 0.725 | 0.586 / 0.453 | 0.440 |
+
+  Mean projected MI by f: 1.4e-3 / 4.6e-4 / 2.1e-4 / 1.1e-4 / 4.5e-5 /
+  1.3e-5 (monotone, 100x from f = 0 to 16).
+- **Showed.** The first task where the posterior clearly earns its keep:
+  where input distance is blind (mid-layer k-NN at chance by construction)
+  and the softmax is overconfident, projected MI tracks how often a fact was
+  seen, well beyond the MAP's entropy (+0.26 / +0.15 over MAP 1-conf within
+  quintiles) and beyond equal-size isotropic noise (+0.16 / +0.19), so the
+  projection's structure, not noise sensitivity, carries the signal. It
+  does not beat the softmax on the MAP's own errors (0.79 vs 0.82). The deep
+  ensemble is stronger on coverage (0.95), at 8 full fine-tunes and samples
+  27x farther from theta_map; it is weaker on errors (0.70).
+- **Caveats.** Posterior samples are small (tol = 0.001 nats, since the MAP
+  NLL is 0.105): the size-matched comparison with the ensemble is open.
+  Within-quintile AUROC conditions on entropy only; a logistic softmax + MI
+  test needs per-probe scores (not saved). "wrong" has 42 positives.
+
 ---
 
 ## Pending
 
-
-- **E17 Knowledge coverage** (`18_bio.lsf`; running since 2026-10-26).
-  Precondition met (MAP-only, `bio_eval_map.json`): exact-match accuracy by
-  frequency 0/1/2/4/8/16 = 3.7% / 85.6% / 92.5% / 96.9% / 99.4% / 99.4%;
-  mean answer-token entropy 0.45 / 0.23 / 0.13 / 0.08 / 0.03 / 0.02, MAP
-  confidence 86% on never-seen people, i.e. **confident hallucination** of
-  their facts. MAP 1-conf, within entropy quintiles: unseen 0.64, rare 0.67,
-  wrong 0.82. Hidden-state k-NN: middle layer ~0.5 on every task (the name
-  control works); last layer rare 0.78 raw / 0.73 within. Does MI track how well the
-  training data supports a fact, beyond entropy and hidden-state k-NN?
-  Chosen design (2026-10-26): synthetic biographies, 40 people per frequency
-  0/1/2/4/8/16 (1,240 documents, 60k tokens), LoRA r=8 on q/v + MLP
-  (P = 1.98M), 20 epochs; token-mode posterior on the whole corpus (8 x 1000
-  sweeps); 960 cloze probes. Tasks: unseen vs seen, rare (f <= 1) vs frequent
-  (f >= 8), MAP wrong vs right; raw and within entropy quintiles. PopQA with a
-  base-weight posterior was set aside: at our scale its constraints would be
-  ~0.02% dense and the fact frequencies unknown.
+- **E17 follow-ups.** (a) Size: rescale the bio posterior to ‖δ‖ 3 -> 80
+  (the ensemble's), with the corpus NLL change at each size: is the
+  ensemble's lead a matter of sample size? (b) Save per-probe scores and test
+  MI beyond entropy and confidence jointly (logistic, as E18).

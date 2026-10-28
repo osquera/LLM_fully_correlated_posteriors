@@ -84,9 +84,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    E17) the gap is far larger. The posterior keeps an edge on
    wrong answers (0.79 vs 0.68-0.73 within quintiles at any ensemble size,
    E17/E22/E25).
-8. **The projection was over-solved.** 25 alternating sweeps (vs 1000)
-   give the same samples' signal and fit, cutting the cost 11x; block-
-   Jacobi CG is slower than the sweeps (E25).
+8. **The projection was over-solved.** 10 alternating sweeps (vs 1000)
+   give the same samples' signal and fit (5 nearly), since the measured
+   alpha absorbs the residual; with a faster alpha search the bio
+   posterior costs ~50 min (~18 fine-tunes, vs 12.6 h in E17), now
+   dominated by the J J^T precompute, which is near its floor on an H100.
+   Block-Jacobi CG and TF32 do not help (E25, E27).
 9. **A posterior knows only what its constraints contain.** On a
    pretrained model constrained on generic text it keeps the fit (also on
    held-out text) but sees neither fact popularity nor errors; semantic
@@ -760,6 +763,39 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   fp32). H2 mostly refuted: smaller batches do less work per row but run
   less efficiently. Both point to overhead-bound passes -> H5 (job 29).
 
+## E27 Speed-ups, part 2: fewer sweeps, faster alpha search
+
+- **Date / job.** 2026-10-28; `28_bio_speedups.lsf` element 4 (fp32, batch
+  16, row_batch 16; snapshots at 5 / 10 / 25 / 50 sweeps, each with its own
+  measured alpha; minimum-first alpha search).
+- **Results.** Precompute 39 min, sweeps 41 s.
+
+  | sweeps | sweep time | residual | alpha | ‖δ‖ | unseen | rare | wrong | worst dNLL |
+  |---|---|---|---|---|---|---|---|---|
+  | 5 | 3.5 min | 0.114 | 1.33e6 | 1.22 | 0.854 | 0.788 | 0.787 | 0.0011 |
+  | 10 | 6.9 min | 0.056 | 3.26e5 | 2.46 | 0.856 | 0.800 | 0.801 | 0.0012 |
+  | 25 | 17 min | 0.023 | 2.26e5 | 2.95 | 0.859 | 0.803 | 0.788 | 0.0010 |
+  | 50 | 35 min | 0.013 | 2.36e5 | 2.89 | 0.861 | 0.801 | 0.798 | 0.0010 |
+
+  (MI AUROC within MAP-entropy quintiles; isotropic 0.705 / 0.615 / 0.768.
+  Held-out logistic unseen 0.908-0.909 and rare 0.930-0.932 at every sweep
+  count. No sample over tol at any snapshot; isotropic 41%.)
+  H4: alpha at 25 sweeps 2.2635e5 vs E25's full search 2.2597e5 (0.2%),
+  search time 3.7 min vs 13 min (3.5x).
+- **Showed.** H3 holds: 5 sweeps keep the signal within the seed spread
+  (E24: up to 0.05), 10 sweeps match 25-50. The less converged samples keep
+  more row-space content, so the measured alpha shrinks them (‖δ‖ 1.22 at
+  5 sweeps) and the fit is safe at any sweep count; the ranking survives
+  the smaller scale. H4 holds. With these, the sweeps and alpha are minor
+  and the precompute dominates: batch 16 at 10 sweeps ~39 + 7 + 4 = 50 min
+  (~18 fine-tunes, vs 68 min in E25 and 12.6 h in E17). Batch 4 / rb 256
+  could give ~8 + 26 + 4 = 38 min (~14 fine-tunes) if its sweeps converge
+  as fast per sweep (untested: smaller batches = more, smaller blocks).
+  Bio-specific: on the pretrained run (E26) the residual converges ~2x
+  slower per sweep (0.067 at 25), so a stopping rule (alpha change between
+  snapshots < a few %) is safer than a fixed count. Even at ~18 fine-tunes
+  the coverage conclusion of E25 stands (the 2-member ensemble beats it).
+
 ## E27 Speed-ups, part 3: where the precompute time goes
 
 - **Date / job.** 2026-10-28; `29_bench_precompute.lsf` (902f374, H100,
@@ -788,6 +824,4 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E27 part 2** (`28_bio_speedups.lsf` element 4, fp32 batch 16): H3 5-10
-  sweeps suffice; H4 minimum-first alpha search = E25's alpha (2.26e5 at 25
-  sweeps).
+- Nothing running.

@@ -35,7 +35,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Current picture
 
-*(as of 2026-10-27; update when an entry changes it)*
+*(as of 2026-10-28; update when an entry changes it)*
 
 1. **Keeps the fit.** At matched sample norm the token-projected posterior
    leaves training and test NLL at the MAP's and breaks the tolerance on 1.8%
@@ -80,9 +80,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    small ‖δ‖ (E23); and a 2-member ensemble already beats the 8-sample
    posterior (E22). The ensemble's advantage is where independent runs
    land, not distance or inference cost; and at equal training compute
-   (one projection ~ 200+ LoRA fine-tunes of GPU time) the gap is far
-   larger. The posterior keeps an edge on
-   wrong answers (0.79 vs 0.70 within quintiles, E17/E22).
+   (a projection ~ 25 LoRA fine-tunes even at 25 sweeps, E25; 277 as run in
+   E17) the gap is far larger. The posterior keeps an edge on
+   wrong answers (0.79 vs 0.68-0.73 within quintiles at any ensemble size,
+   E17/E22/E25).
+8. **The projection was over-solved.** 25 alternating sweeps (vs 1000)
+   give the same samples' signal and fit, cutting the cost 11x; block-
+   Jacobi CG is slower than the sweeps (E25).
 
 ---
 
@@ -638,6 +642,60 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   AUROC moves by up to 0.05 between noise draws at 8 samples (logistic
   <= 0.006), the same size as E22's group std; differences below ~0.05
   within quintiles are within noise.
+
+---
+
+## E25 Cost curve: posterior quality against training GPU time
+
+- **Date / job.** 2026-10-27/28; `25_bio_cost_alt.lsf`, `26_bio_cost_pcg.lsf`
+  (523a606, H100, 4.9 h / 5.3 h). E17's bio posterior recomputed with
+  snapshots after n iterations, each with its own measured alpha: alternating
+  projections (E17's method, which ran 1000 sweeps) at 25 / 50 / 100 / 250,
+  and block-Jacobi preconditioned CG (new, `project_vectors_pcg`; one
+  iteration = the passes of one sweep) at 10 / 25 / 50 / 100 / 250. One more
+  fine-tune timed on the same GPU: **166 s** training (185 s with loading).
+- **Cost of a posterior** = per-batch (J_b J_b^T)^+ precompute (38 min, once)
+  + sweeps (41 s each for 8 samples) + measured alpha (13 min). Ensemble =
+  K x 166 s. (Both also need the MAP fine-tune; an ensemble can count it as
+  a member.)
+- **Results** (within-entropy-quintile AUROC; all posteriors within tol on
+  every document):
+
+  | method | GPU min | ≈ fine-tunes | residual | ‖δ‖ | unseen | rare | wrong |
+  |---|---|---|---|---|---|---|---|
+  | ensemble K = 2 | 5.5 | 2 | | 81 | 0.908 | 0.901 | 0.682 |
+  | ensemble K = 3 | 8.3 | 3 | | 81 | 0.919 | 0.926 | 0.725 |
+  | ensemble K = 4 | 11 | 4 | | 81 | 0.935 | 0.936 | 0.696 |
+  | ensemble K = 8 | 22 | 8 | | 81 | 0.946 | 0.955 | 0.697 |
+  | alternating 25 | 68 | 25 | 0.023 | 2.95 | 0.859 | 0.803 | 0.788 |
+  | alternating 50 | 85 | 31 | 0.013 | 2.90 | 0.861 | 0.801 | 0.798 |
+  | alternating 100 | 119 | 43 | 0.0074 | 2.96 | 0.861 | 0.801 | 0.791 |
+  | alternating 250 | 223 | 81 | 0.0043 | 2.99 | 0.861 | 0.802 | 0.791 |
+  | alternating 1000 (E17) | 767 | 277 | 0.0026 | 2.97 | 0.861 | 0.804 | 0.793 |
+  | PCG 10 | 63 | 23 | 1.13 | 0.19 | 0.789 | 0.645 | 0.795 |
+  | PCG 25 | 74 | 27 | 0.46 | 0.38 | 0.842 | 0.793 | 0.794 |
+  | PCG 100 | 127 | 46 | 0.092 | 1.82 | 0.860 | 0.802 | 0.786 |
+  | PCG 250 | 235 | 85 | 0.063 | 2.49 | 0.859 | 0.804 | 0.792 |
+  | isotropic | | | | 2.99 | 0.706 | 0.615 | 0.767 |
+
+- **Showed.** (1) E17 over-solved by 40x: 25 sweeps give the full signal
+  and fit (the measured alpha absorbs the larger residual at the same ‖δ‖),
+  so the posterior costs ~1.1 h instead of 12.8 h, and the precompute is now
+  more than half of it. (2) Still ~25 fine-tunes: on coverage a 2-member
+  ensemble (2 fine-tunes) beats it at any posterior budget. (3) On wrong
+  answers the posterior beats every ensemble size (0.79 vs 0.68-0.73) at
+  every snapshot. (4) **PCG is a negative result**: block-Jacobi CG
+  converges more slowly than accelerated alternating projections (residual
+  0.46 vs 0.023 at 25 iterations). The 78 batches share their dominant
+  gradient directions, which an additive (Jacobi) preconditioner counts 78
+  times over; the multiplicative sweep (block Gauss-Seidel) does not. A
+  Krylov method would need the sweep itself as preconditioner (symmetric
+  Gauss-Seidel), not block Jacobi. Default stays alternating.
+- **Next.** The remaining cost is the precompute (34k rows of J J^T at one
+  VJP + JVP per row over a batch of 16 sequences: cost ∝ rows x batch size,
+  so a smaller --proj-batch-size cuts it) and alpha. Even at ~0 projection
+  cost, the coverage ranking would not flip; what the posterior offers at
+  any price here is the error signal and keeping the fit.
 
 ---
 

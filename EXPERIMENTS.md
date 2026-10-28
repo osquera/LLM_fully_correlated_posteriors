@@ -84,13 +84,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    E17) the gap is far larger. The posterior keeps an edge on
    wrong answers (0.79 vs 0.68-0.73 within quintiles at any ensemble size,
    E17/E22/E25).
+8. **The projection was over-solved.** 25 alternating sweeps (vs 1000)
+   give the same samples' signal and fit, cutting the cost 11x; block-
+   Jacobi CG is slower than the sweeps (E25).
 9. **A posterior knows only what its constraints contain.** On a
    pretrained model constrained on generic text it keeps the fit (also on
    held-out text) but sees neither fact popularity nor errors; semantic
    entropy wins there (E26).
-8. **The projection was over-solved.** 25 alternating sweeps (vs 1000)
-   give the same samples' signal and fit, cutting the cost 11x; block-
-   Jacobi CG is slower than the sweeps (E25).
 
 ---
 

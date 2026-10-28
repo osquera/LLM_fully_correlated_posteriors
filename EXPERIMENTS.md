@@ -701,4 +701,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- Nothing queued.
+- **E26 Posterior on a pretrained model** (`27_pretrained_qa.lsf`).
+  SmolLM2-360M as pretrained (zero LoRA, posterior on lora_B), constrained
+  on 512 FineWeb-Edu documents; PopQA (rare vs popular, wrong) and TriviaQA
+  (wrong) against entropy, semantic entropy, P(True), k-NN, isotropic, a
+  4-member LoRA ensemble. Risk: too few constraints (E15) -> check the fit on
+  held-out text first.
+- **E27 Speed-ups** (`28_bio_speedups.lsf`, array of 4). Hypotheses vs E25:
+  H1 TF32 makes passes 2-4x faster, same signal; H2 precompute cost ∝
+  projection batch size (16 -> 4 -> 1); H3 5-10 sweeps already suffice;
+  H4 minimum-first alpha search = E25's alpha (2.26e5 at 25 sweeps) at ~1/4
+  of the passes (unit-tested: within 1%, < 1/2 the passes on the toy).

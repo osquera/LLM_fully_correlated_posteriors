@@ -760,6 +760,30 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   fp32). H2 mostly refuted: smaller batches do less work per row but run
   less efficiently. Both point to overhead-bound passes -> H5 (job 29).
 
+## E27 Speed-ups, part 3: where the precompute time goes
+
+- **Date / job.** 2026-10-28; `29_bench_precompute.lsf` (902f374, H100,
+  fp32). One batch's J J^T timed per row_batch (rows per vmapped VJP/JVP),
+  plus a sweep of 8 vectors, extrapolated to the full bio run (25 sweeps).
+- **Results** (full-run estimates; E25 measured precompute 38 min, 25
+  sweeps 17 min at batch 16 / row_batch 16):
+
+  | batch | precompute rb 16 | rb 64 | rb 128 | rb 256 | 25 sweeps |
+  |---|---|---|---|---|---|
+  | 16 | 38 min | 34 min (1.15x, 40 GB) | OOM | OOM | 17 min |
+  | 4 | 27 min | 9.6 min | 9.0 min | 8.4 min (3.4x, 30 GB) | 64 min |
+  | 1 | 29 min | 11 min | 11 min | 11 min (3.1x) | 253 min |
+
+- **Showed.** H5 holds where each call does little work: at batch 1-4,
+  64+ rows per call cut the precompute ~3x (overhead-bound), at batch 16
+  memory caps it at 1.15x (compute-bound). But the sweeps go the other way:
+  small batches make them overhead-bound (4x / 15x slower at batch 4 / 1),
+  and alternating projections are sequential over batches, so they cannot
+  be merged. Best totals at 25 sweeps: batch 16 / rb 64 ~51 min vs 55 now;
+  batch 4 / rb 256 ~72 min. **The setup is near its floor on this
+  hardware**; the remaining lever is the number of sweeps (H3: if 10 suffice,
+  batch 4 / rb 256 gives ~34 min, ~12 fine-tunes).
+
 ---
 
 ## Pending
@@ -767,5 +791,3 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **E27 part 2** (`28_bio_speedups.lsf` element 4, fp32 batch 16): H3 5-10
   sweeps suffice; H4 minimum-first alpha search = E25's alpha (2.26e5 at 25
   sweeps).
-- **E27 part 3** (`29_bench_precompute.lsf`): H5 larger row_batch amortises
-  the per-call overhead of the precompute, at batch 1 / 4 / 16.

@@ -877,6 +877,30 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   adds ~0.00-0.007 to the softmax on errors, the posterior's 0.015-0.030
   in all three. At ~2.5x the ensemble's training compute.
 
+## E28b Ensemble + posterior combined
+
+- **Date / job.** 2026-10-28; local (`combine_bio.py`, 0 GPU) on E28's
+  per-probe scores (`hpc_results/combine_bio_err.json`). Held-out logistic
+  on softmax (entropy + 1-conf) + log MI of posterior (25 sweeps), ensemble
+  (8), or both; 2 folds by person, mean over 10 random person splits. Plus
+  an unfitted score: mean of the two MIs' ranks, within entropy quintiles.
+- **Results** (replications 1 / 2 / 3, mean):
+
+  | task | softmax | +post | +ens | +post+ens | rank mean (within) |
+  |---|---|---|---|---|---|
+  | unseen | 0.786 | 0.851 | 0.904 | **0.921** (0.926 / 0.928 / 0.908) | 0.902 (ens alone 0.879) |
+  | rare | 0.909 | 0.937 | 0.988 | **0.990** (0.990 / 0.992 / 0.988) | 0.971 (ens 0.979) |
+  | wrong | 0.868 | 0.889 | 0.871 | **0.898** (0.884 / 0.892 / 0.917) | 0.817 (post 0.794, ens 0.770) |
+
+- **Showed.** The two are complementary: both MIs together beat either
+  alone in every replication on unseen (+0.017 over the ensemble) and wrong
+  (+0.009 over the posterior, +0.027 over the ensemble); rare is at the
+  ceiling. The unfitted rank mean shows the same without any fitting
+  (unseen 0.902 vs 0.879, wrong 0.817 vs 0.794 / 0.770). Caveat: the
+  combination has 16 forward passes and ~29 fine-tunes of training compute
+  against 8 / 8 for the ensemble; a 16-member ensemble is the missing
+  control for "more members would do the same".
+
 ---
 
 ## Pending

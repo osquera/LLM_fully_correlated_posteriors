@@ -2,14 +2,20 @@
 
 Over evaluate_bio.py outputs (one per replication), per task a held-out
 logistic regression on the MAP softmax (entropy + 1-conf) plus the log MI of
-none, either or both of --post and --ens; 2 folds split by person, repeated
+each of --sets (aliases from --mi joined by "+"; default: posterior,
+ensemble, both); 2 folds split by person, repeated
 over --n-splits random person splits (mean AUROC). The person of each probe
 comes from regenerating the corpus with the seed and counts it was made with
 (make_bio_corpus.py is deterministic). Also an unfitted combination: the
-mean of the two MIs' ranks, AUROC within MAP-entropy quintiles.
+mean of the MIs' ranks per set, AUROC within MAP-entropy quintiles.
 
   uv run python scripts/combine_bio.py figures/bio_eval_err{1,2,3}.json --seeds 1 2 3 \\
       --counts 40 300 300 100 40 40
+
+E28c, 16 members vs 8 + the posterior (evaluate_bio --subsets 8):
+      --mi post="token/projected_alternating25_measured MI" ens16="baseline/lora_ensemble MI" \\
+          ens8="baseline/lora_ensemble[8:0] MI" ens8b="baseline/lora_ensemble[8:1] MI" \\
+      --sets post ens8 ens16 post+ens8 ens8+ens8b
 """
 
 from __future__ import annotations
@@ -36,15 +42,18 @@ def main():
     ap.add_argument("--seeds", type=int, nargs="+", required=True, help="corpus seed per eval")
     ap.add_argument("--freqs", type=int, nargs="+", default=[0, 1, 2, 4, 8, 16])
     ap.add_argument("--counts", type=int, nargs="+", required=True)
-    ap.add_argument("--post", default="token/projected_alternating25_measured MI")
-    ap.add_argument("--ens", default="baseline/lora_ensemble MI")
+    ap.add_argument("--mi", nargs="+", default=["post=token/projected_alternating25_measured MI",
+                                                "ens=baseline/lora_ensemble MI"],
+                    help="alias=score key")
+    ap.add_argument("--sets", nargs="+", default=["post", "ens", "post+ens"])
     ap.add_argument("--tasks", nargs="+", default=["unseen", "rare", "wrong"])
     ap.add_argument("--n-splits", type=int, default=10)
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    sets = {"softmax": [], "+post": [args.post], "+ens": [args.ens], "+post+ens": [args.post, args.ens]}
-    out = {"post": args.post, "ens": args.ens, "tasks": {t: [] for t in args.tasks}}
+    mi = dict(a.split("=", 1) for a in args.mi)
+    sets = {"softmax": [], **{f"+{s}": [mi[a] for a in s.split("+")] for s in args.sets}}
+    out = {"mi": mi, "sets": args.sets, "tasks": {t: [] for t in args.tasks}}
     for path, seed in zip(args.evals, args.seeds):
         r = json.load(open(path))["report"]
         probes = make_probes(make_people(tuple(args.freqs), dict(zip(args.freqs, args.counts)), seed))
@@ -55,7 +64,7 @@ def main():
         pid = np.array([names.index(p["name"]) for p in probes])
         S = {k: torch.tensor(v, dtype=torch.float64) for k, v in r["probe_scores"].items()}
         soft = torch.stack([S["MAP entropy"], S["MAP 1-conf"]], 1)
-        logmi = {k: S[k].clamp_min(1e-12).log()[:, None] for k in (args.post, args.ens)}
+        logmi = {k: S[k].clamp_min(1e-12).log()[:, None] for k in mi.values()}
         for t, (pos, neg) in task_masks(freq, np.array(r["probe_correct"], bool)).items():
             if t not in args.tasks:
                 continue
@@ -73,16 +82,18 @@ def main():
                         aucs.append(auroc(logit[~y[te]], logit[y[te]]))
                 res[name] = float(np.mean(aucs))
             k = torch.from_numpy(keep)
-            rank_mean = (ranks(S[args.post][k]) + ranks(S[args.ens][k])) / 2
             strata = S["MAP entropy"][k]
-            res["within: post"] = stratified_auroc(y, S[args.post][k], strata, 5)["weighted"]
-            res["within: ens"] = stratified_auroc(y, S[args.ens][k], strata, 5)["weighted"]
-            res["within: rank mean"] = stratified_auroc(y, rank_mean, strata, 5)["weighted"]
+            for name, ks in sets.items():
+                if ks:
+                    score = sum(ranks(S[key][k]) for key in ks) / len(ks)
+                    res[f"within: {name[1:]}"] = stratified_auroc(y, score, strata, 5)["weighted"]
             out["tasks"][t].append(res)
 
     for t, rows in out["tasks"].items():
         print(f"\n{t}: held-out logistic AUROC (mean over {args.n_splits} person splits) per replication")
-        for k in [*sets, "within: post", "within: ens", "within: rank mean"]:
+        for k in rows[0]:
+            if k == "eval":
+                continue
             v = [row[k] for row in rows]
             print(f"  {k:20s} " + "  ".join(f"{x:.3f}" for x in v) + f"   mean {np.mean(v):.3f}")
     if args.out:

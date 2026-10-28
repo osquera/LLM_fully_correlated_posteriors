@@ -905,4 +905,8 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- Nothing running.
+- **E28c** (`31_bio_ens16.lsf`, array 1-3): the control for E28b. A
+  16-member ensemble (8 more fine-tunes per replication) against 8 members
+  + the 8-sample posterior, same 16 forward passes. If 16 members match
+  post+ens8 on wrong answers, the posterior's gain was just more members;
+  E28b predicts not (the ensemble adds ~nothing to the softmax on errors).

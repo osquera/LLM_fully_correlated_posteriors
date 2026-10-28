@@ -1,0 +1,51 @@
+#!/bin/sh
+# E28c: is the posterior's gain on top of the ensemble (E28b) just more
+# members? On each of E28's three replications, 8 more fine-tunes (seeds
+# 9-16) make a 16-member ensemble: the control for "8 members + 8 posterior
+# samples" at the same 16 forward passes. Evaluated with the posterior and
+# the 16 members in two groups of 8 (lora_ensemble[8:0] = E28's ensemble,
+# [8:1] = the new members). Then, locally:
+#   uv run python scripts/combine_bio.py figures/bio_eval_err{1,2,3}_ens16.json \
+#       --seeds 1 2 3 --counts 40 300 300 100 40 40 \
+#       --mi post="token/projected_alternating25_measured MI" ens16="baseline/lora_ensemble MI" \
+#           ens8="baseline/lora_ensemble[8:0] MI" ens8b="baseline/lora_ensemble[8:1] MI" \
+#       --sets post ens8 ens16 post+ens8 ens8+ens8b
+# ~1.5 h per element on an H100. Needs 30_bio_errors.lsf's outputs.
+#   bsub < scripts/hpc/31_bio_ens16.lsf
+#BSUB -J "pb_ens16[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_%I_ens16.out
+#BSUB -e logs/%J_%I_ens16.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+corpus=data/bio_err$s/corpus.json
+adapter=checkpoints/bio_err${s}_lora
+samples=samples/posterior_bio_err$s.pt
+baselines=samples/baselines_bio_err${s}_ens16.pt
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+
+members=""
+for m in $(seq 1 16); do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --samples "$samples" "$baselines" \
+    --methods token/projected_alternating25_measured baseline/lora_ensemble \
+    --subsets 8 --subset-methods baseline/lora_ensemble \
+    --out figures/bio_eval_err${s}_ens16.json

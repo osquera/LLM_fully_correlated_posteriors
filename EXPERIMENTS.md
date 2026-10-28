@@ -81,10 +81,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    posterior (E22). The ensemble's advantage is where independent runs
    land, not distance or inference cost; and at equal training compute
    (a projection ~ 25 LoRA fine-tunes even at 25 sweeps, E25; 277 as run in
-   E17) the gap is far larger. The posterior's apparent edge on
-   wrong answers (0.79 vs 0.68-0.73 within quintiles at any ensemble size,
-   E17/E22/E25) is not significant with 42 errors (95% CI of the gap
-   [-0.03, +0.25]), and MAP 1-conf is as good (E25b).
+   E17) the gap is far larger. On wrong answers (E28, three
+   replications, ~500 errors each) the posterior beats the softmax in
+   every replication (+0.08 within quintiles) and adds to it in a held-out
+   logistic test where the ensemble adds ~nothing; against the ensemble
+   it is +0.024 on average (+0.09 / -0.02 / 0.00 by replication). E25b's
+   42-error comparison was too small to tell.
 8. **The projection was over-solved.** 10 alternating sweeps (vs 1000)
    give the same samples' signal and fit (5 nearly), since the measured
    alpha absorbs the residual; with a faster alpha search the bio
@@ -835,15 +837,48 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   hardware**; the remaining lever is the number of sweeps (H3: if 10 suffice,
   batch 4 / rb 256 gives ~34 min, ~12 fine-tunes).
 
+## E28 Error detection with ~500 errors, three replications
+
+- **Date / job.** 2026-10-28; `30_bio_errors.lsf` array 1-3 (42550f4, H100).
+  Each element its own corpus seed (people, facts, theta_map, posterior,
+  8-member ensemble); 40 / 300 / 300 / 100 / 40 / 40 people at f = 0 / 1 /
+  2 / 4 / 8 / 16 (2260 biographies, 3280 probes). Posterior: batch 16, 25
+  sweeps (snapshot at 10), minimum-first alpha. Paired bootstrap with
+  `bootstrap_bio.py` (`hpc_results/bootstrap_bio_err.json`).
+- **Results.** MAP accuracy f = 1 / 2 / 4: 0.67-0.73 / 0.86-0.91 /
+  0.96-0.99; 584 / 561 / 443 wrong answers. Posterior ‖δ‖ 2.5-2.7, no
+  document over tol (isotropic 38-41%; ensemble ‖δ‖ 111, 96-97%).
+  Within-entropy AUROC per replication:
+
+  | task | posterior (25) | ensemble (8) | MAP 1-conf | isotropic |
+  |---|---|---|---|---|
+  | unseen | 0.774 / 0.814 / 0.800 | 0.871 / 0.896 / 0.869 | 0.580 / 0.595 / 0.613 | 0.654 / 0.637 / 0.695 |
+  | rare | 0.845 / 0.862 / 0.787 | 0.977 / 0.980 / 0.979 | 0.745 / 0.659 / 0.781 | 0.706 / 0.540 / 0.707 |
+  | wrong | 0.823 / 0.758 / 0.801 | 0.732 / 0.777 / 0.801 | 0.723 / 0.702 / 0.716 | 0.735 / 0.649 / 0.727 |
+
+  Posterior minus (mean over replications, 95% CI from probes resampled
+  within each): wrong vs ensemble +0.024 [+0.009, +0.061], vs MAP 1-conf
+  +0.081 [+0.061, +0.108], vs isotropic +0.091 [+0.068, +0.114]; unseen vs
+  ensemble -0.082 [-0.110, -0.057]; rare vs ensemble -0.147 [-0.192,
+  -0.112]. 10 sweeps = 25 sweeps on every task (gaps <= 0.003).
+  Held-out logistic on wrong, softmax -> + posterior MI / + ensemble MI:
+  0.848 -> 0.878 / 0.847; 0.867 -> 0.882 / 0.872; 0.885 -> 0.906 / 0.892.
+  Cost: precompute 71 min, 25 sweeps 31 min, alpha 6.7 min = 109 min,
+  ~21 fine-tunes (311 s each); the 8-member ensemble 41 min.
+- **Showed.** With ~10x the errors the picture is clear on two points and
+  mixed on one. (1) The posterior beats the softmax on wrong answers in
+  every replication (+0.08 within quintiles, +0.015-0.030 logistic), so
+  E25b's "no better than MAP 1-conf" was a small-sample artefact. (2) The
+  ensemble wins coverage by a wide margin everywhere. (3) Against the
+  ensemble on wrong answers the posterior is ahead on average, but by
+  replication +0.091 / -0.019 / 0.000: the CI counts probe noise with the
+  three worlds fixed, so the honest reading is "at least as good, ahead in
+  one of three". Its clearer edge is complementarity: the ensemble's MI
+  adds ~0.00-0.007 to the softmax on errors, the posterior's 0.015-0.030
+  in all three. At ~2.5x the ensemble's training compute.
+
 ---
 
 ## Pending
 
-- **E28** (`30_bio_errors.lsf`, array 1-3): is the posterior's edge on
-  wrong answers real? Three independent bio replications (corpus seeds 1-3)
-  with many more people seen once or twice (40 / 300 / 300 / 100 / 40 / 40
-  at f = 0-16; 2260 biographies, 3280 probes), ~250 errors each vs 42.
-  Posterior at 10 / 25 sweeps, 8-member ensemble, then
-  `bootstrap_bio.py` (paired, probes resampled within each replication).
-  Hypothesis: the posterior beats the ensemble on wrong answers (CI above
-  0); open whether it beats MAP 1-conf (E25b: no).
+- Nothing running.

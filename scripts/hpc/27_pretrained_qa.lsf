@@ -1,0 +1,55 @@
+#!/bin/sh
+# Option 1: a posterior on a model you cannot retrain. SmolLM2-360M as
+# pretrained, theta_map = the pretrained weights (zero-initialised LoRA
+# adapter, lora_B = 0; the posterior lives on lora_B), constrained token-wise
+# on 512 FineWeb-Edu documents (128 tokens). Evaluated on closed-book PopQA
+# (popularity = how often a fact is seen) and TriviaQA (errors) against
+# entropy / 1-conf / NLL, semantic entropy (10 samples), P(True), hidden-state
+# k-NN / Mahalanobis, isotropic noise and a 4-member LoRA ensemble fine-tuned
+# on the same text; plus the fit on the constraint text and on held-out text.
+# Needs network access for SmolLM2-360M, FineWeb-Edu (streamed), PopQA and
+# TriviaQA (if the job fails on a download, run the corpus step on a login
+# node first: it is skipped when data/fineweb/corpus.json exists).
+# ~6-8 h on an H100.
+#   bsub < scripts/hpc/27_pretrained_qa.lsf
+#BSUB -J pb_pt_qa
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=32GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_pt_qa.out
+#BSUB -e logs/%J_pt_qa.err
+
+. scripts/hpc/env.sh
+
+model=HuggingFaceTB/SmolLM2-360M
+corpus=data/fineweb/corpus.json
+zero=checkpoints/pt360_zero
+samples=samples/posterior_pt360.pt
+lora="--lora-r 8 --lora-alpha 16 --lora-targets q_proj v_proj gate_proj up_proj down_proj"
+
+[ -f "$corpus" ] || uv run python scripts/make_text_corpus.py --n 2000 --out "$corpus"
+# 0 epochs: the adapter as initialised, lora_B = 0, i.e. the pretrained model
+[ -f "$zero/run.json" ] || uv run python scripts/finetune_lora.py --model $model \
+    --dataset "$corpus" --split "train[:512]" --max-length 128 --epochs 0 $lora --out "$zero"
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py --base-model $model \
+    --adapter "$zero" --include lora_B --dataset "$corpus" --split "train[:512]" \
+    --n-train 512 --max-length 128 --proj-batch-size 2 --loss-mode token \
+    --projector iterative --n-samples 8 --n-iterations 50 --snapshots 25 50 \
+    --alpha-tol 0.01 --out "$samples"
+
+members=""
+for s in 1 2 3 4; do
+    m=checkpoints/pt360_ens$s
+    [ -f "$m/run.json" ] || uv run python scripts/finetune_lora.py --model $model \
+        --dataset "$corpus" --split "train[:512]" --max-length 128 --batch-size 8 \
+        --epochs 2 --lr 1e-3 $lora --seed $s --out "$m"
+    members="$members $m"
+done
+
+uv run python scripts/evaluate_pretrained_qa.py --base-model $model --adapter "$zero" \
+    --corpus "$corpus" --samples "$samples" --members $members \
+    --n-popqa 2000 --n-trivia 2000 --n-gen 10 --out figures/pretrained_qa.json

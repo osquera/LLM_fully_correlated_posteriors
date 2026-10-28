@@ -1,0 +1,55 @@
+#!/bin/sh
+# Cheaper posteriors, E17's bio setup, against E25 (fp32, projection batch 16:
+# precompute 38 min, 41 s/sweep, alpha 13 min; 25 sweeps already give the full
+# signal). Four configurations as a job array, each with snapshots after
+# 5 / 10 / 25 / 50 sweeps (H3: even fewer sweeps suffice) and the minimum-first
+# alpha search (H4: same alpha as E25's full search, ~1/4 of the passes):
+#   1  TF32, batch 16   H1: TF32 matmuls make every pass 2-4x faster with
+#                           the same samples' signal; plus a timed TF32
+#                           fine-tune, so the cost axis stays fair
+#   2  TF32, batch 4    H2: the precompute costs rows x batch size (each row
+#   3  TF32, batch 1        of J J^T is a VJP + JVP over the whole batch), so
+#                           smaller batches cut it ~linearly; the sweeps may
+#                           need more iterations (more, smaller blocks)
+#   4  fp32, batch 16   E25 again but for the alpha search: H4 at scale
+# Then E17's evaluation of every snapshot. ~1.5 h each on an H100.
+# Needs 18_bio.lsf's outputs.
+#   bsub < scripts/hpc/28_bio_speedups.lsf
+#BSUB -J "pb_speed[1-4]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 8:00
+#BSUB -o logs/%J_%I_speed.out
+#BSUB -e logs/%J_%I_speed.err
+
+. scripts/hpc/env.sh
+
+case "$LSB_JOBINDEX" in
+    1) tf32=--tf32; S=16 ;;
+    2) tf32=--tf32; S=4 ;;
+    3) tf32=--tf32; S=1 ;;
+    4) tf32=; S=16 ;;
+esac
+tag="speed${LSB_JOBINDEX}"
+
+if [ "$LSB_JOBINDEX" = 1 ]; then
+    uv run python scripts/finetune_lora.py --model HuggingFaceTB/SmolLM2-135M \
+        --dataset data/bio/corpus.json --split train --max-length 96 --batch-size 16 \
+        --epochs 20 --lr 1e-3 --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed 10 --tf32 --out checkpoints/bio_lora_tf32_timing
+fi
+
+samples=samples/posterior_bio_$tag.pt
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset data/bio/corpus.json --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size $S $tf32 \
+    --n-samples 8 --n-iterations 50 --snapshots 5 10 25 50 \
+    --alpha-tol 0.01 --adapter checkpoints/bio_lora --out "$samples"
+
+methods=token/isotropic_measured
+for n in 5 10 25 50; do methods="$methods token/projected_alternating${n}_measured"; done
+uv run python scripts/evaluate_bio.py --corpus data/bio/corpus.json --adapter checkpoints/bio_lora \
+    --samples "$samples" --methods $methods --out figures/bio_eval_$tag.json

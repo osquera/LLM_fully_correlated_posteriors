@@ -191,6 +191,7 @@ def measure_alpha(
     directions: torch.Tensor,
     kernel_dim: float,
     tol: float,
+    all_radii: bool = False,
     **radius_kwargs,
 ) -> tuple[float, list[float]]:
     """Prior precision set from a measured loss tolerance, not from Lemma 3.4.
@@ -203,12 +204,32 @@ def measure_alpha(
 
     Unlike `optimal_alpha`, this needs only the *relative* accuracy of
     ``kernel_dim``, which Hutchinson provides well at scale.
+
+    Only the smallest radius matters, so by default the first direction gets
+    the full grid scan + bisection and every other one first a single check
+    at the current minimum r*: if it stays within ``tol`` there, its radius is
+    >= r* and it is done (reported as r*, a lower bound); only otherwise does it
+    bisect, below r*. Same alpha as ``all_radii=True`` (which searches every
+    direction fully) up to the bisection resolution, at ~1/4 of the loss passes.
     """
     base = per_row_losses(f, theta, batches)
-    radii = [
-        loss_radius(f, theta, space, batches, d, tol, base=base, **radius_kwargs)
-        for d in directions
-    ]
+    if all_radii:
+        radii = [loss_radius(f, theta, space, batches, d, tol, base=base, **radius_kwargs)
+                 for d in directions]
+    else:
+        radii = [loss_radius(f, theta, space, batches, directions[0], tol, base=base,
+                             **radius_kwargs)]
+        for d in directions[1:]:
+            r_star = min(radii)
+            if r_star <= 0.0 or _worst_change(f, theta, space, batches, d, r_star, base) <= tol:
+                radii.append(r_star)
+                continue
+            # below r*: bisect in log space between the grid point under it and r*
+            grid = radius_kwargs.get("grid", torch.logspace(-3, 3, 31))
+            below = grid[grid < r_star]
+            radii.append(_bisect(f, theta, space, batches, d, tol, base,
+                                 float(below[-1]) if len(below) else 0.0, r_star,
+                                 radius_kwargs.get("n_bisect", 8)))
     r_star = min(radii)
     if r_star <= 0.0:
         raise ValueError(
@@ -216,3 +237,28 @@ def measure_alpha(
             f"tol={tol:.3g}; pass a finer grid or a looser tol"
         )
     return kernel_dim / r_star**2, radii
+
+
+@torch.no_grad()
+def _worst_change(f, theta, space, batches, direction, s, base) -> float:
+    u = direction.to(device=space.device, dtype=space.dtype)
+    u = u / u.norm()
+    th = {n: theta[n] + d for n, d in space.unflatten(u * s).items()}
+    return float((per_row_losses(f, th, batches) - base).abs().max())
+
+
+@torch.no_grad()
+def _bisect(f, theta, space, batches, direction, tol, base, lo, hi, n_bisect) -> float:
+    """Largest passing step in (lo, hi], hi known to fail; log-space bisection
+    as in `loss_radii` (lo = 0: check the grid's bottom first)."""
+    if lo <= 0.0:
+        lo = 1e-3
+        if _worst_change(f, theta, space, batches, direction, lo, base) > tol:
+            return 0.0
+    for _ in range(n_bisect):
+        mid = (lo * hi) ** 0.5
+        if _worst_change(f, theta, space, batches, direction, mid, base) > tol:
+            hi = mid
+        else:
+            lo = mid
+    return lo

@@ -398,3 +398,34 @@ def test_sampler_snapshots_equal_shorter_runs():
         short, _ = sample_projected_posterior(f, theta, space, batches, n_iterations=5, **kw)
         assert torch.allclose(info["snapshots"][5]["pv"], short, rtol=1e-9, atol=1e-10)
         assert info["snapshots"][20]["seconds"] >= info["snapshots"][5]["seconds"] > 0
+
+
+def test_fast_measure_alpha_matches_full_search_with_fewer_passes():
+    """Searching only below the running minimum must give the full search's
+    alpha (up to the bisection resolution) for far fewer loss passes."""
+    _, space, theta, f, batches = _toy()
+    factors = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    kdim = float(space.P - sum(fa.rank for fa in factors))
+    gen = torch.Generator().manual_seed(5)
+    dirs = torch.stack([
+        project_vector(torch.randn(space.P, generator=gen, dtype=space.dtype),
+                       f, theta, space, batches, factors, n_iterations=200)
+        for _ in range(6)
+    ])
+    tol = 0.01 * float(per_row_losses(f, theta, batches).mean())
+    calls = {"n": 0}
+
+    def counted(th, b):
+        calls["n"] += 1
+        return f(th, b)
+
+    a_full, r_full = measure_alpha(counted, theta, space, batches, dirs, kdim, tol, all_radii=True)
+    n_full, calls["n"] = calls["n"], 0
+    a_fast, r_fast = measure_alpha(counted, theta, space, batches, dirs, kdim, tol)
+    n_fast = calls["n"]
+    # one bisection step halves the log bracket of a grid cell (10^0.2): 8 steps
+    # pin the radius to ~0.2% (alpha ~0.4%)
+    assert a_fast == pytest.approx(a_full, rel=1e-2), (a_fast, a_full)
+    assert min(r_fast) == pytest.approx(min(r_full), rel=5e-3)
+    assert all(r >= min(r_fast) for r in r_fast)
+    assert n_fast < 0.5 * n_full, (n_fast, n_full)

@@ -50,6 +50,7 @@ def parse_args():
     ap.add_argument("--out", default="checkpoints/smollm2_lora")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--tf32", action="store_true", help="TF32 matmuls on Ampere/Hopper")
     return ap.parse_args()
 
 
@@ -65,6 +66,7 @@ def build_loader(args, tokenizer):
 def main():
     args = parse_args()
     torch.manual_seed(args.seed)
+    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = args.tf32
 
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     if tokenizer.pad_token is None:

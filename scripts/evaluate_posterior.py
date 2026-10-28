@@ -127,6 +127,16 @@ def selective_report(tok: dict, with_mi: bool) -> dict:
 @torch.no_grad()
 def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
     """Metrics of the BMA over ``deltas`` (n_samples, P) on one encoded set."""
+    params = []
+    for d in deltas:
+        upd = space.unflatten(d.to(device=space.device, dtype=space.dtype))
+        params.append({**frozen, **{n: theta[n] + u for n, u in upd.items()}})
+    return evaluate_params(model, params, enc, device, batch_size)
+
+
+def evaluate_params(model, params, enc, device, batch_size):
+    """`evaluate_set` for a list of full parameter dicts (one per sample), e.g.
+    ensemble members that are not offsets in one ParamSpace."""
     n_seq = enc["input_ids"].size(0)
     tot = {"nll_bma": 0.0, "nll_sample": 0.0, "correct": 0.0, "entropy": 0.0, "mi": 0.0}
     ntok = 0
@@ -135,13 +145,8 @@ def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
     bin_acc = torch.zeros(N_BINS)
     seq_mi = torch.zeros(n_seq)
     seq_h = torch.zeros(n_seq)
-    seq_nll = torch.zeros(deltas.shape[0], n_seq)  # per sample, per sequence
+    seq_nll = torch.zeros(len(params), n_seq)  # per sample, per sequence
     tok = {"correct": [], "conf": [], "entropy": [], "mi": []}  # per valid token
-
-    params = []
-    for d in deltas:
-        upd = space.unflatten(d.to(device=space.device, dtype=space.dtype))
-        params.append({**frozen, **{n: theta[n] + u for n, u in upd.items()}})
 
     for i in range(0, n_seq, batch_size):
         ids = enc["input_ids"][i : i + batch_size].to(device)

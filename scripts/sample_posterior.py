@@ -59,6 +59,10 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-model", default="HuggingFaceTB/SmolLM2-135M")
     ap.add_argument("--adapter", default="checkpoints/smollm2_lora")
+    ap.add_argument("--include", nargs="+", default=["lora_A", "lora_B"],
+                    help="theta = adapter tensors whose names contain these; 'lora_B' "
+                         "alone for a zero-initialised adapter on a pretrained model, "
+                         "where every lora_A direction has an exactly zero gradient")
     ap.add_argument("--dataset", default="tatsu-lab/alpaca")
     ap.add_argument("--split", default="train[:2000]",
                     help="MUST be the fine-tuning split: we project against theta_map's own data")
@@ -95,6 +99,11 @@ def parse_args():
     ap.add_argument("--alpha-directions", type=int, default=None,
                     help="samples whose directions are probed (default: all of them, "
                          "so every saved sample is within tolerance)")
+    ap.add_argument("--alpha-all-radii", action="store_true",
+                    help="search every direction's radius fully (diagnostics); default: "
+                         "only what the smallest radius, i.e. alpha, needs")
+    ap.add_argument("--tf32", action="store_true",
+                    help="TF32 matmuls on Ampere/Hopper (faster passes, ~1e-3 relative precision)")
     ap.add_argument("--out", default=None, help="default: samples/posterior_<loss-mode>.pt")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
@@ -111,6 +120,7 @@ def main():
         print(f"WARNING: --loss-on {args.loss_on}, but the adapter was fine-tuned with "
               f"{tuned_on}: the projection then constrains tokens theta_map did not fit")
     out = Path(args.out or f"samples/posterior_{args.loss_mode}.pt")
+    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = args.tf32
     timings = {}
 
     tokenizer = AutoTokenizer.from_pretrained(args.adapter)
@@ -124,7 +134,7 @@ def main():
     model.eval()
 
     # theta = the LoRA adapters only. Everything else is frozen.
-    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"], trainable_only=False)
+    space = ParamSpace.from_module(model, include=args.include, trainable_only=False)
     theta = space.theta(model)
     frozen = space.frozen(model)
     print(space)
@@ -188,16 +198,20 @@ def main():
           f"max residual = {info['kernel_residual_max']:.2e}")
 
     # ---- alpha: closed form and measured ----
-    alpha_cf = optimal_alpha(theta, space, kdim, n_probes=n_probes)
+    # the closed form divides by ||theta_map||^2, which is 0 for a zero-
+    # initialised adapter on a pretrained model: then only the measured alpha
+    theta_sq = float(sum((t.float() ** 2).sum() for t in theta.values()))
+    alpha_cf = optimal_alpha(theta, space, kdim, n_probes=n_probes) if theta_sq > 0 else None
 
     t0 = time.perf_counter()
     map_rows = per_row_losses(f_seq, theta, batches)
     tol_abs = args.alpha_tol * float(map_rows.mean())
     k = args.alpha_directions or pv.shape[0]
-    alpha_ms, radii = measure_alpha(f_seq, theta, space, batches, pv[:k], kdim, tol_abs)
+    alpha_ms, radii = measure_alpha(f_seq, theta, space, batches, pv[:k], kdim, tol_abs,
+                                    all_radii=args.alpha_all_radii)
     timings["measure_alpha"] = time.perf_counter() - t0
 
-    alphas = {"measured": alpha_ms, "closed_form": alpha_cf}
+    alphas = {"measured": alpha_ms, **({"closed_form": alpha_cf} if alpha_cf else {})}
     for name, a in alphas.items():
         print(f"alpha[{name:11s}] = {a:.4e}   => ||delta|| ~ {(kdim / a) ** 0.5:.4g}")
     print(f"  measured: tol = {tol_abs:.4g} nats ({args.alpha_tol:g} x MAP mean NLL "
@@ -225,7 +239,8 @@ def main():
         spv = sn["pv"].to(pv.dtype)
         res = max(kernel_residual(v.to(space.device, space.dtype), f, theta, space, batches)
                   for v in spv)
-        a_n, radii_n = measure_alpha(f_seq, theta, space, batches, spv[:k], kdim, tol_abs)
+        a_n, radii_n = measure_alpha(f_seq, theta, space, batches, spv[:k], kdim, tol_abs,
+                                     all_radii=args.alpha_all_radii)
         methods[f"projected_{args.solver}{n}_measured"] = spv / a_n**0.5
         snap_info[n] = {"seconds": sn["seconds"], "kernel_residual_max": res, "alpha": a_n,
                         "radii": radii_n}

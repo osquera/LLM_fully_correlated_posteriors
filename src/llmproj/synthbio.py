@@ -49,9 +49,12 @@ class Person:
     facts: dict[str, str] = field(default_factory=dict)
 
 
-def make_people(freqs=(0, 1, 2, 4, 8, 16), per_freq: int = 40, seed: int = 0) -> list[Person]:
-    """``per_freq`` people per frequency. Never-seen people (freq 0) get names
-    whose first and last name both also belong to seen people."""
+def make_people(freqs=(0, 1, 2, 4, 8, 16), per_freq: int | dict[int, int] = 40,
+                seed: int = 0) -> list[Person]:
+    """``per_freq`` people per frequency (or {freq: count}). Never-seen people
+    (freq 0) get names whose first and last name both also belong to seen
+    people."""
+    counts = per_freq if isinstance(per_freq, dict) else {f: per_freq for f in freqs}
     rng = random.Random(seed)
     names = [f"{a} {b}" for a in FIRST for b in LAST]
     rng.shuffle(names)
@@ -61,9 +64,9 @@ def make_people(freqs=(0, 1, 2, 4, 8, 16), per_freq: int = 40, seed: int = 0) ->
             firsts = {p.name.split()[0] for p in people}
             lasts = {p.name.split()[1] for p in people}
             names = [n for n in names if n.split()[0] in firsts and n.split()[1] in lasts]
-            if len(names) < per_freq:
+            if len(names) < counts[f]:
                 raise ValueError("not enough familiar names left for the unseen people")
-        for _ in range(per_freq):
+        for _ in range(counts[f]):
             p = Person(names.pop(), f)
             p.facts = {a: rng.choice(vals) for a, vals in ATTRS.items()}
             people.append(p)

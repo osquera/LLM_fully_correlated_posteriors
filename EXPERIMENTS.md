@@ -839,4 +839,11 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- Nothing running.
+- **E28** (`30_bio_errors.lsf`, array 1-3): is the posterior's edge on
+  wrong answers real? Three independent bio replications (corpus seeds 1-3)
+  with many more people seen once or twice (40 / 300 / 300 / 100 / 40 / 40
+  at f = 0-16; 2260 biographies, 3280 probes), ~250 errors each vs 42.
+  Posterior at 10 / 25 sweeps, 8-member ensemble, then
+  `bootstrap_bio.py` (paired, probes resampled within each replication).
+  Hypothesis: the posterior beats the ensemble on wrong answers (CI above
+  0); open whether it beats MAP 1-conf (E25b: no).

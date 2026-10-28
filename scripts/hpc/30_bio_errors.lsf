@@ -1,0 +1,66 @@
+#!/bin/sh
+# E28: does the posterior detect the MAP's wrong answers better than the
+# ensemble and the softmax? E25b: with 42 errors the gap to the ensemble was
+# +0.095, 95% CI [-0.03, +0.25], and MAP 1-conf was as good as the posterior.
+# Here three independent replications (array index = corpus seed: own people,
+# facts, theta_map, posterior and 8-member ensemble), each with many more
+# people seen once or twice (40 / 300 / 300 / 100 / 40 / 40 at f = 0 / 1 / 2 /
+# 4 / 8 / 16 vs 40 each in E17): ~250 errors per replication if accuracy per
+# frequency stays as in E17. Posterior as made cheap in E27 (batch 16, 25
+# sweeps with a 10-sweep snapshot, minimum-first alpha search).
+# Then bootstrap_bio.py over the three outputs, locally:
+#   uv run python scripts/bootstrap_bio.py figures/bio_eval_err{1,2,3}.json \
+#       --ref "token/projected_alternating25_measured MI" \
+#       --vs "baseline/lora_ensemble MI" "MAP 1-conf" "MAP entropy" "token/isotropic_measured MI"
+# ~4 h per element on an H100 (1.8x E17's corpus).
+#   bsub < scripts/hpc/30_bio_errors.lsf
+#BSUB -J "pb_err[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_%I_err.out
+#BSUB -e logs/%J_%I_err.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+corpus=data/bio_err$s/corpus.json
+adapter=checkpoints/bio_err${s}_lora
+samples=samples/posterior_bio_err$s.pt
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+
+[ -f "$corpus" ] || uv run python scripts/make_bio_corpus.py \
+    --freqs 0 1 2 4 8 16 --counts 40 300 300 100 40 40 --seed "$s" --out "$corpus"
+ft 0 "$adapter"
+# MAP-only check first: accuracy (and so the number of errors) per frequency
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --out figures/bio_eval_err${s}_map.json
+
+members=""
+for m in 1 2 3 4 5 6 7 8; do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 25 --snapshots 10 25 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f samples/baselines_bio_err$s.pt ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out samples/baselines_bio_err$s.pt
+
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --samples "$samples" samples/baselines_bio_err$s.pt \
+    --methods token/isotropic_measured token/projected_alternating10_measured \
+        token/projected_alternating25_measured baseline/lora_ensemble \
+    --subsets 2 4 --subset-methods baseline/lora_ensemble \
+    --out figures/bio_eval_err$s.json

@@ -22,10 +22,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--freqs", type=int, nargs="+", default=[0, 1, 2, 4, 8, 16])
     ap.add_argument("--per-freq", type=int, default=40)
+    ap.add_argument("--counts", type=int, nargs="+", default=None,
+                    help="people per frequency, one per --freqs (overrides --per-freq)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="data/bio/corpus.json")
     args = ap.parse_args()
-    people = make_people(tuple(args.freqs), args.per_freq, args.seed)
+    if args.counts and len(args.counts) != len(args.freqs):
+        raise SystemExit("--counts needs one count per --freqs")
+    per_freq = dict(zip(args.freqs, args.counts)) if args.counts else args.per_freq
+    people = make_people(tuple(args.freqs), per_freq, args.seed)
     texts = make_corpus(people, args.seed)
     probes = make_probes(people)
     out = Path(args.out)

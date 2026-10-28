@@ -84,6 +84,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    E17) the gap is far larger. The posterior keeps an edge on
    wrong answers (0.79 vs 0.68-0.73 within quintiles at any ensemble size,
    E17/E22/E25).
+9. **A posterior knows only what its constraints contain.** On a
+   pretrained model constrained on generic text it keeps the fit (also on
+   held-out text) but sees neither fact popularity nor errors; semantic
+   entropy wins there (E26).
 8. **The projection was over-solved.** 25 alternating sweeps (vs 1000)
    give the same samples' signal and fit, cutting the cost 11x; block-
    Jacobi CG is slower than the sweeps (E25).
@@ -699,16 +703,69 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ---
 
+## E26 Posterior on a pretrained model: PopQA / TriviaQA
+
+- **Date / job.** 2026-10-28; `27_pretrained_qa.lsf` (78bdee7, H100, ~5 h).
+  SmolLM2-360M as pretrained; zero-initialised LoRA (r 8, q/v/gate/up/down),
+  posterior on lora_B (P = 1.88M), token-mode on 512 FineWeb-Edu documents x
+  128 tokens (65k rows), batch 2, 50 sweeps (projection incl. precompute
+  2.4 h); measured alpha -> ‖δ‖ 79. Closed-book few-shot QA, greedy answer;
+  2000 PopQA (accuracy 10.2%), 2000 TriviaQA (32.4%). Scores on the model's
+  own answer. LoRA ensemble: 4 fine-tunes (2 epochs) on the same 512 docs.
+- **Fit.** Constraint docs: 0% over tol (worst 0.027 = tol); held-out
+  FineWeb docs: **6.7%** over tol (isotropic 59%, ensemble 64%). With 65k
+  token constraints the fit generalises to unseen text of the same kind.
+- **Results** (AUROC raw / within MAP-entropy quintiles):
+
+  | score | PopQA rare vs popular | PopQA wrong | TriviaQA wrong |
+  |---|---|---|---|
+  | MAP entropy | 0.675 / 0.571 | 0.744 / 0.488 | 0.794 / 0.594 |
+  | MAP NLL of the answer | 0.671 / 0.576 | 0.777 / 0.664 | 0.816 / 0.675 |
+  | **semantic entropy** (10 samples) | 0.570 / 0.508 | **0.867 / 0.779** | **0.850 / 0.756** |
+  | 1 - P(True) | 0.445 / 0.467 | 0.549 / 0.561 | 0.614 / 0.642 |
+  | projected MI | 0.455 / 0.363 | 0.717 / 0.654 | 0.683 / 0.482 |
+  | isotropic MI | 0.470 / 0.340 | 0.687 / 0.590 | 0.668 / 0.426 |
+  | LoRA ensemble MI | 0.511 / 0.390 | 0.700 / 0.577 | 0.685 / 0.474 |
+  | k-NN L16 | 0.443 / 0.504 | 0.622 / 0.663 | 0.483 / 0.605 |
+
+  Spearman with -log popularity: projected MI -0.05 (entropy +0.24).
+  Logistic softmax -> + score: popqa_wrong 0.746 -> 0.753 (MI), 0.762 (SE),
+  0.858 (NLL); trivia_wrong 0.791 -> 0.786 (MI), 0.805 (SE), 0.841 (NLL).
+  25 vs 50 sweeps: identical.
+- **Showed.** A negative result with a clear reason. The posterior keeps
+  the fit, even on held-out text, but its MI does not see fact popularity
+  (below chance) and adds nothing on errors beyond the softmax; semantic
+  entropy and the answer's own NLL are far better. MI measures how tightly
+  the *constraint data* pins a prediction: a 512-document sample of generic
+  text contains essentially none of the PopQA facts, so all facts are equally
+  unconstrained. In the biographies (E17) the constraint data were the facts.
+  The posterior can only know what its constraints contain, so the
+  "posterior on a pretrained model" needs constraints that cover the
+  pretraining data's facts (at their frequencies) -- i.e. projection on a
+  representative share of the pretraining corpus, and E24 says the coverage
+  signal lives in the spectrum's tail, so top-k will not do.
+
+## E27 Speed-ups, part 1: TF32 and projection batch size
+
+- **Date / job.** 2026-10-28; `28_bio_speedups.lsf` elements 1-2 (78bdee7).
+- **Results.** H1 TF32 (batch 16): precompute 30.9 min vs 38.3 fp32
+  (1.24x), sweeps 38 s vs 41 s (1.08x), fine-tune 158 s vs 166 s (1.05x); and
+  the alpha search **failed**: under TF32 even the smallest grid step
+  changed a document's NLL by more than tol (0.00105 nats), i.e. TF32's
+  rounding noise in the per-token losses exceeds the tolerance. H2 batch 4
+  (+TF32): precompute 27.6 min (1.4x vs fp32 batch 16, not the ~4x a FLOP
+  count predicts). Elements 2-3 killed (TF32 alpha would fail the same way).
+- **Showed.** H1 refuted: the passes are not matmul-bound, and TF32 is too
+  noisy for the alpha measurement (fixed: alpha and residuals now always
+  fp32). H2 mostly refuted: smaller batches do less work per row but run
+  less efficiently. Both point to overhead-bound passes -> H5 (job 29).
+
+---
+
 ## Pending
 
-- **E26 Posterior on a pretrained model** (`27_pretrained_qa.lsf`).
-  SmolLM2-360M as pretrained (zero LoRA, posterior on lora_B), constrained
-  on 512 FineWeb-Edu documents; PopQA (rare vs popular, wrong) and TriviaQA
-  (wrong) against entropy, semantic entropy, P(True), k-NN, isotropic, a
-  4-member LoRA ensemble. Risk: too few constraints (E15) -> check the fit on
-  held-out text first.
-- **E27 Speed-ups** (`28_bio_speedups.lsf`, array of 4). Hypotheses vs E25:
-  H1 TF32 makes passes 2-4x faster, same signal; H2 precompute cost ∝
-  projection batch size (16 -> 4 -> 1); H3 5-10 sweeps already suffice;
-  H4 minimum-first alpha search = E25's alpha (2.26e5 at 25 sweeps) at ~1/4
-  of the passes (unit-tested: within 1%, < 1/2 the passes on the toy).
+- **E27 part 2** (`28_bio_speedups.lsf` element 4, fp32 batch 16): H3 5-10
+  sweeps suffice; H4 minimum-first alpha search = E25's alpha (2.26e5 at 25
+  sweeps).
+- **E27 part 3** (`29_bench_precompute.lsf`): H5 larger row_batch amortises
+  the per-call overhead of the precompute, at batch 1 / 4 / 16.

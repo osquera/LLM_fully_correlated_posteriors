@@ -1,0 +1,28 @@
+#!/bin/sh
+# E27 follow-up: what does the precompute's time go to? TF32 gave only 1.2x
+# and a 4x smaller projection batch only 1.4x (not the ~4x of a FLOP count):
+# the passes look overhead-bound, not compute-bound. H5: more rows of J J^T per
+# vmapped VJP/JVP (row_batch, default 16) amortise that overhead. Times one
+# batch's J J^T for row_batch 16 (twice: the first is warm-up) / 64 / 128 /
+# 256 at projection batch 1 / 4 / 16 on the bio corpus, plus one sweep, each
+# extrapolated to the full run (25 sweeps). ~20 min on an H100.
+#   bsub < scripts/hpc/29_bench_precompute.lsf
+#BSUB -J pb_bench
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 2:00
+#BSUB -o logs/%J_bench.out
+#BSUB -e logs/%J_bench.err
+
+. scripts/hpc/env.sh
+
+for S in 16 4 1; do
+    echo "=============== projection batch $S"
+    uv run python scripts/benchmark_projection.py --adapter checkpoints/bio_lora \
+        --dataset data/bio/corpus.json --split train --max-length 96 --n-train 100000 \
+        --proj-batch-size $S --n-batches 2 --n-samples 8 --n-iterations 25 \
+        --row-batch 16 16 64 128 256 --vec-batch 8
+done

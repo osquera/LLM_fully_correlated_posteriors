@@ -103,7 +103,8 @@ def parse_args():
                     help="search every direction's radius fully (diagnostics); default: "
                          "only what the smallest radius, i.e. alpha, needs")
     ap.add_argument("--tf32", action="store_true",
-                    help="TF32 matmuls on Ampere/Hopper (faster passes, ~1e-3 relative precision)")
+                    help="TF32 matmuls for the projection passes (alpha stays fp32). E27: only "
+                         "1.1-1.2x faster on an H100, the passes are not matmul-bound")
     ap.add_argument("--out", default=None, help="default: samples/posterior_<loss-mode>.pt")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
@@ -196,6 +197,10 @@ def main():
     print(f"projected {pv.shape[0]} vectors in {timings['projection']:.1f}s, "
           f"kernel_dim = {kdim:.1f} / P = {space.P}, "
           f"max residual = {info['kernel_residual_max']:.2e}")
+
+    # loss evaluations below compare per-token losses to ~1e-3 nats, under
+    # TF32's rounding noise (E27): projection passes only, alpha in fp32
+    torch.backends.cuda.matmul.allow_tf32 = torch.backends.cudnn.allow_tf32 = False
 
     # ---- alpha: closed form and measured ----
     # the closed form divides by ||theta_map||^2, which is 0 for a zero-

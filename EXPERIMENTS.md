@@ -81,9 +81,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    posterior (E22). The ensemble's advantage is where independent runs
    land, not distance or inference cost; and at equal training compute
    (a projection ~ 25 LoRA fine-tunes even at 25 sweeps, E25; 277 as run in
-   E17) the gap is far larger. The posterior keeps an edge on
+   E17) the gap is far larger. The posterior's apparent edge on
    wrong answers (0.79 vs 0.68-0.73 within quintiles at any ensemble size,
-   E17/E22/E25).
+   E17/E22/E25) is not significant with 42 errors (95% CI of the gap
+   [-0.03, +0.25]), and MAP 1-conf is as good (E25b).
 8. **The projection was over-solved.** 10 alternating sweeps (vs 1000)
    give the same samples' signal and fit (5 nearly), since the measured
    alpha absorbs the residual; with a faster alpha search the bio
@@ -705,6 +706,20 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   any price here is the error signal and keeping the fit.
 
 ---
+
+## E25b Is the posterior's edge on wrong answers real? (bootstrap)
+
+- **Date / job.** 2026-10-28; local, on E25's saved per-probe scores
+  (`bio_eval_cost_alt.json`), 1000 paired bootstrap resamples of the
+  "wrong" task (42 wrong / 758 right), within-entropy AUROC.
+- **Results.** Posterior (25 sweeps) 0.788, 8-member ensemble 0.697, MAP
+  1-conf 0.822, isotropic 0.767. Posterior minus ensemble +0.095, 95% CI
+  [-0.030, +0.245] (P <= 0: 0.06); minus MAP 1-conf -0.027 [-0.140, +0.078];
+  minus isotropic +0.026 [-0.079, +0.134].
+- **Showed.** With 42 errors the edge over the ensemble is suggestive, not
+  established, and the posterior does not beat MAP 1-conf at all within
+  entropy quintiles. Point 7's "the posterior keeps an edge on wrong
+  answers" needs a test with many more errors (proposed E28).
 
 ## E26 Posterior on a pretrained model: PopQA / TriviaQA
 

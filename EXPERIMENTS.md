@@ -901,12 +901,37 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   against 8 / 8 for the ensemble; a 16-member ensemble is the missing
   control for "more members would do the same".
 
+## E28c 16-member ensemble control
+
+- **Date / job.** 2026-10-30; `31_bio_ens16.lsf` array 1-3 (091c975, H100):
+  8 more fine-tunes (seeds 9-16, ~300 s each) per E28 replication, evaluated
+  with the posterior; `combine_bio.py` locally
+  (`hpc_results/combine_bio_err_ens16.json`). ens8 = E28's members 1-8,
+  ens8b = the new 9-16, ens16 = all (one MI); ens8+ens8b = both MIs as two
+  features.
+- **Results** (held-out logistic AUROC, mean of 3 replications; 16 forward
+  passes marked *):
+
+  | task | softmax | +post | +ens8 | +ens16* | +ens8+ens8b* | +post+ens8* | +post+ens16 |
+  |---|---|---|---|---|---|---|---|
+  | unseen | 0.786 | 0.851 | 0.904 | 0.915 | **0.922** | 0.921 | 0.927 |
+  | rare | 0.909 | 0.937 | 0.988 | 0.992 | **0.994** | 0.990 | 0.993 |
+  | wrong | 0.868 | 0.889 | 0.871 | 0.873 | 0.873 | **0.898** | 0.899 |
+
+  Wrong per replication, post+ens8 vs ens16: 0.884 / 0.892 / 0.916 vs
+  0.850 / 0.873 / 0.894. Within entropy quintiles (unfitted rank mean):
+  wrong post+ens8 0.817 vs ens16 0.777, ens8+ens8b 0.786; unseen 0.902 vs
+  0.893 / 0.903; rare 0.971 vs 0.986 / 0.989.
+- **Showed.** At equal inference cost (16 passes) the posterior's gain on
+  wrong answers is not a member count effect: 8 more members add 0.002 to
+  the ensemble on errors, the posterior 0.025 (+0.03 / +0.02 / +0.02 by
+  replication). On coverage 8 more members do as well as or better than
+  the posterior (unseen tie, rare +0.004). So the posterior adds something
+  the ensemble lacks only on errors; on coverage a bigger ensemble is the
+  better buy (and cheaper: 16 fine-tunes vs 8 + ~21 for post+ens8).
+
 ---
 
 ## Pending
 
-- **E28c** (`31_bio_ens16.lsf`, array 1-3): the control for E28b. A
-  16-member ensemble (8 more fine-tunes per replication) against 8 members
-  + the 8-sample posterior, same 16 forward passes. If 16 members match
-  post+ens8 on wrong answers, the posterior's gain was just more members;
-  E28b predicts not (the ensemble adds ~nothing to the softmax on errors).
+- Nothing running.

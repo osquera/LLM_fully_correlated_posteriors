@@ -8,7 +8,9 @@ posterior must preserve the fine-tuning loss.
 
 Only the LoRA adapters are trainable, so theta has P ~ 1-5M rather than 135M.
 That keeps every sample vector small enough to hold several at once, and puts
-the work in direct comparison with Laplace-LoRA (Yang et al., 2024).
+the work in direct comparison with Laplace-LoRA (Yang et al., 2024). --full
+fine-tunes every weight instead and saves the whole model (theta = all 135M
+parameters downstream, llmproj.models.load_finetuned).
 """
 
 from __future__ import annotations
@@ -51,6 +53,8 @@ def parse_args():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--tf32", action="store_true", help="TF32 matmuls on Ampere/Hopper")
+    ap.add_argument("--full", action="store_true",
+                    help="full fine-tuning (every weight trainable) instead of LoRA")
     return ap.parse_args()
 
 
@@ -86,8 +90,11 @@ def main():
         bias="none",
         task_type="CAUSAL_LM",
     )
-    model = get_peft_model(model, lora)
-    model.print_trainable_parameters()
+    if args.full:
+        print(f"full fine-tuning: {sum(p.numel() for p in model.parameters()):,} parameters")
+    else:
+        model = get_peft_model(model, lora)
+        model.print_trainable_parameters()
 
     loader, ds = build_loader(args, tokenizer)
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.lr)

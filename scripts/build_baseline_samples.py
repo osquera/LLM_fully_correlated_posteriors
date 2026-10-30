@@ -2,7 +2,8 @@
 like any posterior (offsets delta from theta_map in the same LoRA ParamSpace):
 
   lora_ensemble  M LoRA adapters fine-tuned like theta_map with other seeds
-                 (finetune_lora.py --seed s): a deep ensemble of the adapter,
+                 (finetune_lora.py --seed s): a deep ensemble of the adapter
+                 (``ensemble`` for fully fine-tuned models, finetune_lora.py --full),
                  the "if compute were free" reference. delta_m = theta_m - theta_map,
                  so theta_map + delta_m is member m exactly.
   dropconnect    MC-dropout-style: every LoRA weight dropped with probability p
@@ -24,9 +25,8 @@ import argparse
 from pathlib import Path
 
 import torch
-from peft import PeftModel
-from transformers import AutoModelForCausalLM
 
+from llmproj.models import is_adapter, load_finetuned
 from llmproj.paramspace import ParamSpace
 
 
@@ -40,20 +40,21 @@ def parse_args():
     ap.add_argument("--dropconnect-p", type=float, nargs="*", default=[0.1])
     ap.add_argument("--n-samples", type=int, default=8, help="DropConnect masks")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--save-dtype", choices=["float32", "float16"], default="float32")
     ap.add_argument("--out", default="samples/baselines.pt")
     return ap.parse_args()
 
 
 def lora_theta(base_model: str, adapter: str) -> tuple[ParamSpace, torch.Tensor]:
-    base = AutoModelForCausalLM.from_pretrained(base_model, dtype=torch.float32)
-    model = PeftModel.from_pretrained(base, adapter)
-    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"], trainable_only=False)
+    """theta of an adapter (its LoRA tensors) or of a full model (every weight)."""
+    model, include = load_finetuned(base_model, adapter)
+    space = ParamSpace.from_module(model, include=include, trainable_only=False)
     return space, space.flatten(space.theta(model)).detach().clone()
 
 
 def main():
     args = parse_args()
-    like = torch.load(args.like, weights_only=False)
+    like = torch.load(args.like, weights_only=False, mmap=True)  # only its args are read
     space, theta = lora_theta(args.base_model, args.adapter)
     print(f"theta_map from {args.adapter}: {space}")
 
@@ -63,9 +64,9 @@ def main():
         for m in args.members:
             sp, th = lora_theta(args.base_model, m)
             if sp.names != space.names or sp.shapes != space.shapes:
-                raise SystemExit(f"{m}: LoRA layout differs from {args.adapter}")
+                raise SystemExit(f"{m}: parameter layout differs from {args.adapter}")
             deltas.append(th - theta)
-        methods["lora_ensemble"] = torch.stack(deltas)
+        methods["lora_ensemble" if is_adapter(args.adapter) else "ensemble"] = torch.stack(deltas)
     gen = torch.Generator().manual_seed(args.seed)
     for p in args.dropconnect_p:
         keep = (torch.rand(args.n_samples, space.P, generator=gen) >= p).float()
@@ -79,7 +80,8 @@ def main():
             "norms": {m: float(d.norm(dim=1).mean()) for m, d in methods.items()}}
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"methods": methods, "names": space.names, "shapes": space.shapes,
+    dt = getattr(torch, args.save_dtype)
+    torch.save({"methods": {m: d.to(dt) for m, d in methods.items()}, "names": space.names, "shapes": space.shapes,
                 "info": info, "args": {**like["args"], "baseline_args": vars(args)}}, out)
     print(f"saved {out}")
 

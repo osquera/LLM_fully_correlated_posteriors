@@ -31,13 +31,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
 
 from analyze_posterior import stratified_auroc
 from combine_bio import heldout_auroc, probe_ids
 from evaluate_bio import encode_probes, spearman
 from evaluate_posterior import auroc
+from llmproj.models import load_finetuned
 
 
 def parse_args():
@@ -102,9 +102,7 @@ def main():
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
-    base = AutoModelForCausalLM.from_pretrained(args.base_model, attn_implementation="eager",
-                                                dtype=torch.float32)
-    model = PeftModel.from_pretrained(base, args.adapter).to(args.device).eval()
+    model, _ = load_finetuned(args.base_model, args.adapter, args.device)
 
     # the MAP's teacher-forced answer per probe
     enc = encode_probes(tok, probes)

@@ -43,13 +43,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
 
 from analyze_posterior import logistic_gain, seq_index, stratified_auroc
 from baselines_single_pass import KNN, Mahalanobis, seq_mean, token_features
 from evaluate_posterior import auroc, evaluate_set
 from llmproj.data import encode_texts
+from llmproj.models import load_finetuned
 from llmproj.paramspace import ParamSpace
 
 FREQ_TASKS = {"unseen": (lambda f: f == 0, lambda f: f >= 1),
@@ -137,16 +137,14 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(args.adapter)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    base = AutoModelForCausalLM.from_pretrained(args.base_model, attn_implementation="eager",
-                                                dtype=torch.float32)
-    model = PeftModel.from_pretrained(base, args.adapter).to(args.device).eval()
-    space = ParamSpace.from_module(model, include=["lora_A", "lora_B"], trainable_only=False)
+    model, include = load_finetuned(args.base_model, args.adapter, args.device)
+    space = ParamSpace.from_module(model, include=include, trainable_only=False)
     theta, frozen = space.theta(model), space.frozen(model)
     enc = encode_probes(tokenizer, probes)
 
     methods, tol = {"map": torch.zeros(1, space.P)}, None
     for p in args.samples:
-        blob = torch.load(p, weights_only=False)
+        blob = torch.load(p, weights_only=False, mmap=True)
         mode = blob["info"]["loss_mode"]
         if mode == "token":
             tol = blob["info"]["alpha_tol_nats"]

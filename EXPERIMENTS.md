@@ -950,3 +950,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   frequency, the training fit of each fact (answer-token NLL at its
   training occurrences) and whether the posterior adds beyond it, and which
   errors each score catches.
+- **E31** (`34_bio_full.lsf`, array 1-3): LoRA vs full fine-tuning on
+  E28's three bio corpora. Full fine-tuned theta_map (lr 2e-5, 20 epochs)
+  and 8-member full ensemble; projected posterior over all 135M weights
+  with an isotropic prior and with a per-tensor RMS-scaled prior (10
+  sweeps). Compared with E28/E28c's LoRA world, each on its own MAP's
+  errors. Hypotheses: the cost is only ~1.5-3x LoRA's (the projection is
+  matrix-free, the constraint count is the same); the isotropic full
+  posterior is worse than LoRA's (badly scaled prior: alpha set by the
+  most sensitive tensors), the RMS-scaled one about as good, i.e. LoRA
+  mainly acts as a sensible prior on which directions may vary.

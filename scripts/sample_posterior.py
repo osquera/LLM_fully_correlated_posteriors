@@ -38,8 +38,7 @@ import time
 from pathlib import Path
 
 import torch
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoTokenizer
 
 from llmproj.alpha import measure_alpha, optimal_alpha, per_row_losses
 from llmproj.baselines import (
@@ -51,6 +50,7 @@ from llmproj.baselines import (
 )
 from llmproj.data import encode_texts, load_texts
 from llmproj.losses import make_causal_lm_loss
+from llmproj.models import load_finetuned
 from llmproj.paramspace import ParamSpace
 from llmproj.projection import kernel_residual, sample_projected_posterior
 
@@ -58,11 +58,17 @@ from llmproj.projection import kernel_residual, sample_projected_posterior
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-model", default="HuggingFaceTB/SmolLM2-135M")
-    ap.add_argument("--adapter", default="checkpoints/smollm2_lora")
-    ap.add_argument("--include", nargs="+", default=["lora_A", "lora_B"],
-                    help="theta = adapter tensors whose names contain these; 'lora_B' "
-                         "alone for a zero-initialised adapter on a pretrained model, "
-                         "where every lora_A direction has an exactly zero gradient")
+    ap.add_argument("--adapter", default="checkpoints/smollm2_lora",
+                    help="theta_map: a LoRA adapter, or a fully fine-tuned model (--full)")
+    ap.add_argument("--include", nargs="+", default=None,
+                    help="theta = tensors whose names contain these (default: lora_A lora_B "
+                         "for an adapter, every parameter for a full model); 'lora_B' alone "
+                         "for a zero-initialised adapter on a pretrained model, where every "
+                         "lora_A direction has an exactly zero gradient")
+    ap.add_argument("--prior-scale", choices=["none", "rms"], default="none",
+                    help="rms: prior std per tensor proportional to theta_map's RMS in it "
+                         "(project in z = theta / s, samples s * z): weights of very "
+                         "different scale (embeddings, norms, matrices) move alike relatively")
     ap.add_argument("--dataset", default="tatsu-lab/alpaca")
     ap.add_argument("--split", default="train[:2000]",
                     help="MUST be the fine-tuning split: we project against theta_map's own data")
@@ -105,6 +111,11 @@ def parse_args():
     ap.add_argument("--tf32", action="store_true",
                     help="TF32 matmuls for the projection passes (alpha stays fp32). E27: only "
                          "1.1-1.2x faster on an H100, the passes are not matmul-bound")
+    ap.add_argument("--save-methods", nargs="*", default=None,
+                    help="keep only these methods in the output (default: all; names "
+                         "before the _rms tag of --prior-scale rms)")
+    ap.add_argument("--save-dtype", choices=["float32", "float16"], default="float32",
+                    help="float16 halves the file (a full-model sample is 0.54 GB in fp32)")
     ap.add_argument("--out", default=None, help="default: samples/posterior_<loss-mode>.pt")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
@@ -128,13 +139,10 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    base = AutoModelForCausalLM.from_pretrained(
-        args.base_model, attn_implementation="eager", dtype=torch.float32
-    )
-    model = PeftModel.from_pretrained(base, args.adapter).to(args.device)
-    model.eval()
+    model, include = load_finetuned(args.base_model, args.adapter, args.device)
+    args.include = args.include or include
 
-    # theta = the LoRA adapters only. Everything else is frozen.
+    # theta = the LoRA adapters (or every weight of a full model). The rest is frozen.
     space = ParamSpace.from_module(model, include=args.include, trainable_only=False)
     theta = space.theta(model)
     frozen = space.frozen(model)
@@ -142,6 +150,18 @@ def main():
 
     f = make_causal_lm_loss(model, space, frozen, mode=args.loss_mode)
     f_seq = make_causal_lm_loss(model, space, frozen, mode="sequence")
+    scale = None
+    if args.prior_scale == "rms":
+        # everything below works in z = theta / s (an isotropic prior there); samples
+        # go back to theta as s * z at the end
+        rms = {n: float(t.float().pow(2).mean().sqrt()) for n, t in theta.items()}
+        fallback = sum(rms.values()) / len(rms)
+        scale = {n: (r if r > 0 else fallback) for n, r in rms.items()}
+        f0, f_seq0 = f, f_seq
+        f = lambda z, b: f0({n: z[n] * scale[n] for n in z}, b)  # noqa: E731
+        f_seq = lambda z, b: f_seq0({n: z[n] * scale[n] for n in z}, b)  # noqa: E731
+        theta = {n: t / scale[n] for n, t in theta.items()}
+        print(f"prior scale = RMS per tensor: {min(scale.values()):.3g} .. {max(scale.values()):.3g}")
 
     texts = load_texts(args.dataset, args.split, args.text_field)[: args.n_train]
     enc = encode_texts(tokenizer, texts, args.max_length, loss_on=args.loss_on)
@@ -206,7 +226,8 @@ def main():
     # the closed form divides by ||theta_map||^2, which is 0 for a zero-
     # initialised adapter on a pretrained model: then only the measured alpha
     theta_sq = float(sum((t.float() ** 2).sum() for t in theta.values()))
-    alpha_cf = optimal_alpha(theta, space, kdim, n_probes=n_probes) if theta_sq > 0 else None
+    alpha_cf = (optimal_alpha(theta, space, kdim, n_probes=n_probes)
+                if theta_sq > 0 and scale is None else None)
 
     t0 = time.perf_counter()
     map_rows = per_row_losses(f_seq, theta, batches)
@@ -254,6 +275,13 @@ def main():
     if snap_info:
         info["snapshots"] = snap_info
 
+    if args.save_methods is not None:
+        methods = {m: d for m, d in methods.items() if m in args.save_methods}
+    if scale is not None:  # z -> theta
+        s_flat = torch.cat([torch.full((ne,), scale[n]) for n, ne in zip(space.names, space.numels)])
+        # named apart from the isotropic-prior run's methods (projected_rms_measured, ...)
+        methods = {m.replace("projected", "projected_rms").replace("isotropic", "isotropic_rms"):
+                   d * s_flat.to(d.device, d.dtype) for m, d in methods.items()}
     norms = {m: float(d.norm(dim=1).mean()) for m, d in methods.items()}
     print("\nmean sample norm per method:")
     for m, n in norms.items():
@@ -268,7 +296,8 @@ def main():
         "timings": timings,
     })
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"methods": {m: d.float() for m, d in methods.items()},
+    dt = getattr(torch, args.save_dtype)
+    torch.save({"methods": {m: d.to(dt) for m, d in methods.items()},
                 "names": space.names, "shapes": space.shapes,
                 "info": info, "args": vars(args)}, out)
     out.with_suffix(".json").write_text(json.dumps(

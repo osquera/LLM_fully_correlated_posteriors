@@ -86,7 +86,9 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    every replication (+0.08 within quintiles) and adds to it in a held-out
    logistic test where the ensemble adds ~nothing; against the ensemble
    it is +0.024 on average (+0.09 / -0.02 / 0.00 by replication). E25b's
-   42-error comparison was too small to tell.
+   42-error comparison was too small to tell. Combined with the ensemble it
+   adds +0.025 on errors at equal inference cost, which 8 more members do
+   not (+0.002); on coverage 8 more members match it (E28b, E28c).
 8. **The projection was over-solved.** 10 alternating sweeps (vs 1000)
    give the same samples' signal and fit (5 nearly), since the measured
    alpha absorbs the residual; with a faster alpha search the bio

@@ -234,6 +234,7 @@ def main():
     report["subsets"] = subset_summary(report, args.subset_methods, args.subsets)
     report["probe_scores"] = {k: v.tolist() for k, v in scores.items()}
     report["probe_freq"], report["probe_correct"] = freq.tolist(), correct.tolist()
+    report["probe_name"] = [q["name"] for q in probes]
 
     print("\nper training frequency: MAP exact-match accuracy and mean scores")
     keys = list(scores)

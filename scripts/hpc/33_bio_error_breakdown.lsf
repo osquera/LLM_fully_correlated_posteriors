@@ -1,0 +1,28 @@
+#!/bin/sh
+# E30: why does the posterior catch errors the softmax and the ensemble miss
+# (E28, E28c)? error_breakdown.py on each of E28's three bio replications:
+# error types (the fact swapped with another person's value vs anything else;
+# first answer token wrong vs only later ones), AUROC within each training
+# frequency, how well the fine-tune fit each fact (answer-token NLL at its
+# training occurrences) and whether the posterior adds beyond that, and which
+# errors each score catches. The same analysis runs on PopQA in job 32.
+# ~15 min per element. Needs 30_bio_errors.lsf and 31_bio_ens16.lsf outputs.
+#   bsub < scripts/hpc/33_bio_error_breakdown.lsf
+#BSUB -J "pb_ebreak[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -W 2:00
+#BSUB -o logs/%J_%I_ebreak.out
+#BSUB -e logs/%J_%I_ebreak.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+uv run python scripts/error_breakdown.py --corpus data/bio_err$s/corpus.json \
+    --adapter checkpoints/bio_err${s}_lora --eval figures/bio_eval_err${s}_ens16.json \
+    --scores post="token/projected_alternating25_measured MI" ens16="baseline/lora_ensemble MI" \
+        ens8="baseline/lora_ensemble[8:0] MI" 1-conf="MAP 1-conf" \
+    --out figures/error_breakdown_bio$s.json

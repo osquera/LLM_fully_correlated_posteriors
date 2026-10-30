@@ -936,4 +936,17 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- Nothing running.
+- **E29** (`32_popqa_errors.lsf`, array 1-3): E28/E28c on real facts.
+  PopQA questions fine-tuned into the 135M model at f = 1 / 2 / 4 / 8
+  (800 / 800 / 300 / 150) plus 400 held out, 3 Q/A pairs per document
+  (`make_popqa_corpus.py`, 88k tokens); per replication theta_map, a
+  16-member ensemble and the posterior (25 sweeps). Hypothesis: post+ens8
+  beats ens16 on wrong answers as on the bio corpus; the ensemble wins
+  coverage.
+- **E30** (`33_bio_error_breakdown.lsf` on E28's bio replications; the same
+  script inside job 32 for PopQA): why the posterior catches errors.
+  `error_breakdown.py`: error types (fact swapped with another training
+  value vs other; first vs later answer token wrong), AUROC within each
+  frequency, the training fit of each fact (answer-token NLL at its
+  training occurrences) and whether the posterior adds beyond it, and which
+  errors each score catches.

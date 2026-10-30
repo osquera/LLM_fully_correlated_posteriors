@@ -36,12 +36,38 @@ def ranks(x):
     return torch.from_numpy(np.argsort(np.argsort(x.numpy())).astype(np.float64))
 
 
+def heldout_auroc(X, y, pid, n_splits, seed=0):
+    """Logistic AUROC, 2 folds split by pid, mean over n_splits random splits."""
+    rng = np.random.default_rng(seed)
+    aucs = []
+    for _ in range(n_splits):
+        fold = torch.from_numpy(rng.permutation(int(pid.max()) + 1)[pid] % 2 == 1)
+        for te in (fold, ~fold):
+            logit = fit_logistic(X[~te], y[~te].double())(X[te])
+            aucs.append(auroc(logit[~y[te]], logit[y[te]]))
+    return float(np.mean(aucs))
+
+
+def probe_ids(report, seed=None, freqs=None, counts=None):
+    """Person / subject index per probe: from the report (evaluate_bio saves
+    probe_name), else by regenerating the bio corpus."""
+    names = report.get("probe_name")
+    if names is None:
+        probes = make_probes(make_people(tuple(freqs), dict(zip(freqs, counts)), seed))
+        if [p["freq"] for p in probes] != report["probe_freq"]:
+            raise SystemExit("regenerated probes do not match (seed / counts?)")
+        names = [p["name"] for p in probes]
+    idx = {n: i for i, n in enumerate(dict.fromkeys(names))}
+    return np.array([idx[n] for n in names])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("evals", nargs="+")
-    ap.add_argument("--seeds", type=int, nargs="+", required=True, help="corpus seed per eval")
+    ap.add_argument("--seeds", type=int, nargs="+", default=None,
+                    help="bio corpus seed per eval (only for outputs without probe_name)")
     ap.add_argument("--freqs", type=int, nargs="+", default=[0, 1, 2, 4, 8, 16])
-    ap.add_argument("--counts", type=int, nargs="+", required=True)
+    ap.add_argument("--counts", type=int, nargs="+", default=None)
     ap.add_argument("--mi", nargs="+", default=["post=token/projected_alternating25_measured MI",
                                                 "ens=baseline/lora_ensemble MI"],
                     help="alias=score key")
@@ -54,14 +80,10 @@ def main():
     mi = dict(a.split("=", 1) for a in args.mi)
     sets = {"softmax": [], **{f"+{s}": [mi[a] for a in s.split("+")] for s in args.sets}}
     out = {"mi": mi, "sets": args.sets, "tasks": {t: [] for t in args.tasks}}
-    for path, seed in zip(args.evals, args.seeds):
+    for j, path in enumerate(args.evals):
         r = json.load(open(path))["report"]
-        probes = make_probes(make_people(tuple(args.freqs), dict(zip(args.freqs, args.counts)), seed))
         freq = np.array(r["probe_freq"])
-        if len(probes) != len(freq) or any(p["freq"] != f for p, f in zip(probes, freq)):
-            raise SystemExit(f"{path}: regenerated probes do not match (seed / counts?)")
-        names = list(dict.fromkeys(p["name"] for p in probes))
-        pid = np.array([names.index(p["name"]) for p in probes])
+        pid = probe_ids(r, args.seeds[j] if args.seeds else None, args.freqs, args.counts)
         S = {k: torch.tensor(v, dtype=torch.float64) for k, v in r["probe_scores"].items()}
         soft = torch.stack([S["MAP entropy"], S["MAP 1-conf"]], 1)
         logmi = {k: S[k].clamp_min(1e-12).log()[:, None] for k in mi.values()}
@@ -71,16 +93,9 @@ def main():
             keep = pos | neg
             y = torch.from_numpy(pos[keep])
             res = {"eval": path}
-            rng = np.random.default_rng(0)
             for name, ks in sets.items():
                 X = torch.cat([soft, *(logmi[k] for k in ks)], 1)[torch.from_numpy(keep)]
-                aucs = []
-                for _ in range(args.n_splits):
-                    fold = torch.from_numpy(rng.permutation(len(names))[pid[keep]] % 2 == 1)
-                    for te in (fold, ~fold):
-                        logit = fit_logistic(X[~te], y[~te].double())(X[te])
-                        aucs.append(auroc(logit[~y[te]], logit[y[te]]))
-                res[name] = float(np.mean(aucs))
+                res[name] = heldout_auroc(X, y, pid[keep], args.n_splits)
             k = torch.from_numpy(keep)
             strata = S["MAP entropy"][k]
             for name, ks in sets.items():

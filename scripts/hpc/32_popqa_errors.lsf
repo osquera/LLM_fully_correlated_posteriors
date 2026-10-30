@@ -1,0 +1,77 @@
+#!/bin/sh
+# E29: does E28's result hold on real facts? E28 (+b, c): on the synthetic
+# biographies the posterior adds ~+0.025 AUROC to the softmax + ensemble on
+# the MAP's wrong answers, which 8 more members do not, while the ensemble
+# wins knowledge coverage. Here the same design on PopQA (real entities and
+# questions; scripts/make_popqa_corpus.py): 400 held-out questions and
+# 800 / 800 / 300 / 150 fine-tuned at f = 1 / 2 / 4 / 8, packed 3 Q/A pairs
+# per document (88k tokens, bio 110k). Three replications (array index =
+# corpus seed: other questions), each with theta_map, a 16-member ensemble
+# and the posterior (25 sweeps, snapshot at 10), then evaluate_bio.py (the
+# corpus has the bio format) and error_breakdown.py (E30's analysis).
+# Then, locally:
+#   uv run python scripts/combine_bio.py figures/popqa_eval{1,2,3}.json \
+#       --mi post="token/projected_alternating25_measured MI" ens16="baseline/lora_ensemble MI" \
+#           ens8="baseline/lora_ensemble[8:0] MI" ens8b="baseline/lora_ensemble[8:1] MI" \
+#       --sets post ens8 ens16 post+ens8 ens8+ens8b
+#   uv run python scripts/bootstrap_bio.py figures/popqa_eval{1,2,3}.json \
+#       --ref "token/projected_alternating25_measured MI" \
+#       --vs "baseline/lora_ensemble[8:0] MI" "baseline/lora_ensemble MI" "MAP 1-conf" "token/isotropic_measured MI"
+# ~5 h per element on an H100 (16 fine-tunes ~1.3 h, posterior ~1.5 h).
+#   bsub < scripts/hpc/32_popqa_errors.lsf
+#BSUB -J "pb_popqa[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_%I_popqa.out
+#BSUB -e logs/%J_%I_popqa.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+corpus=data/popqa$s/corpus.json
+adapter=checkpoints/popqa${s}_lora
+samples=samples/posterior_popqa$s.pt
+baselines=samples/baselines_popqa$s.pt
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+
+[ -f "$corpus" ] || uv run python scripts/make_popqa_corpus.py --seed "$s" --out "$corpus"
+ft 0 "$adapter"
+# MAP-only check first: accuracy (and so the number of errors) per frequency
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --out figures/popqa_eval${s}_map.json
+
+members=""
+for m in $(seq 1 16); do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 25 --snapshots 10 25 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_alternating10_measured \
+        token/projected_alternating25_measured baseline/lora_ensemble \
+    --subsets 8 --subset-methods baseline/lora_ensemble \
+    --out figures/popqa_eval$s.json
+
+uv run python scripts/error_breakdown.py --corpus "$corpus" --adapter "$adapter" \
+    --eval figures/popqa_eval$s.json \
+    --scores post="token/projected_alternating25_measured MI" ens16="baseline/lora_ensemble MI" \
+        ens8="baseline/lora_ensemble[8:0] MI" 1-conf="MAP 1-conf" \
+    --out figures/error_breakdown_popqa$s.json

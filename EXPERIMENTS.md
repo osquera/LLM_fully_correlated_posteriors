@@ -35,7 +35,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Current picture
 
-*(as of 2026-10-28; update when an entry changes it)*
+*(as of 2026-11-01; update when an entry changes it)*
 
 1. **Keeps the fit.** At matched sample norm the token-projected posterior
    leaves training and test NLL at the MAP's and breaks the tolerance on 1.8%
@@ -89,6 +89,17 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    42-error comparison was too small to tell. Combined with the ensemble it
    adds +0.025 on errors at equal inference cost, which 8 more members do
    not (+0.002); on coverage 8 more members match it (E28b, E28c).
+   E30 says why: the edge is on **near-miss continuations** (a swapped
+   training value, or a wrong token after a right first token: post 0.780 /
+   0.792 vs ens16 0.708 / 0.701), which every member makes alike, while the
+   ensemble's own edge is on first-token errors (0.842 vs post 0.767), which
+   it catches as novelty. The posterior also beats the softmax most where
+   the fact was fit (f = 1 0.807, f = 2 0.875) and still adds to the MAP's
+   confidence and to the training fit in a held-out logistic test. It does
+   **not** transfer to real facts yet: on PopQA (E29 rep 2) the posterior
+   is below the MAP's own confidence on errors (0.703 vs 0.816) and well
+   below the ensemble on coverage (0.638 vs 0.851), though the MAP there is
+   already 92-98% accurate and there are only 82 errors.
 8. **The projection was over-solved.** 10 alternating sweeps (vs 1000)
    give the same samples' signal and fit (5 nearly), since the measured
    alpha absorbs the residual; with a faster alpha search the bio
@@ -934,6 +945,92 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ---
 
+## E30 Why the posterior catches errors (bio, E28's replications)
+
+- **Date / job.** 2026-10-31; `33_bio_error_breakdown.lsf` array 1-3 (a772320,
+  gpuh100, ~50 s per element), `error_breakdown.py` on E28's
+  `bio_eval_err{1,2,3}_ens16.json`: 3120 seen probes per replication,
+  584 / 561 / 443 wrong. Within-entropy AUROC (5 strata of MAP entropy),
+  mean of the three replications.
+- **Results.** By error type (n = errors per replication, averaged):
+
+  | error type | n | post | ens16 | ens8 | 1-conf | train fit |
+  |---|---|---|---|---|---|---|
+  | swap (another training value) | 130 | **0.780** | 0.708 | 0.710 | 0.714 | 0.660 |
+  | other | 400 | **0.803** | 0.790 | 0.780 | 0.720 | 0.704 |
+  | first answer token wrong | 281 | 0.767 | **0.842** | 0.833 | 0.666 | 0.667 |
+  | later answer tokens wrong | 248 | **0.792** | 0.701 | 0.695 | 0.709 | 0.691 |
+
+  By training frequency (rep 3 has too few f = 4 errors to report):
+
+  | f | n_wrong | post | ens16 | ens8 | 1-conf | train fit |
+  |---|---|---|---|---|---|---|
+  | 1 | 369 | **0.807** | 0.728 | 0.723 | 0.777 | 0.696 |
+  | 2 | 147 | **0.875** | 0.732 | 0.717 | 0.872 | 0.726 |
+  | 4 | 16 | 0.925 | 0.688 | 0.691 | **0.934** | 0.775 |
+
+  Held-out logistic (folds by name), mean of 3: softmax 0.868, +train fit
+  0.857, **+post 0.889**, +train fit + post **0.898**, +ens16 0.873,
+  +train fit + ens16 0.890, +ens8 0.871, +train fit + ens8 0.887.
+  Spearman with the fact's training-fit NLL: post 0.547, ens16 0.269,
+  1-conf 0.641. Overlap at the 20% most uncertain seen probes, post vs
+  ens16: both 205, post only 123, ens16 only 79, neither 122 (per
+  replication); post vs train fit: post only 179, train fit only 102.
+- **Showed.** The mechanism is **partiality of the fit, not the fit
+  itself**. The posterior's edge over the softmax is largest exactly where
+  the fact was seen often enough to be fit (f = 2: 0.875 vs 0.872; f = 4:
+  0.925 vs 0.934, i.e. a tie) but it still beats the softmax by +0.03 at
+  f = 1, and it beats the 16-member ensemble by +0.14 / +0.14 / +0.24 at
+  f = 1 / 2 / 4. The ensemble inverts this: it is *best* on errors it can
+  only catch as novelty (first-token errors, 0.842 vs the posterior's
+  0.767) and near-chance on later-token errors (0.701), where the first
+  token is right and only the continuation is wrong. The posterior catches
+  the opposite class: a near-miss continuation (`Oslo` -> ` L`, `Lille`
+  -> ` Bille`) moves a token the constraints had seen, so the samples
+  disagree about it, whereas every ensemble member makes the same near-miss
+  and the ensemble cannot see it. The posterior also tracks the training
+  fit far more closely than the ensemble does (rho 0.55 vs 0.27) but still
+  adds beyond it in the logistic test (0.889 -> 0.898), and flags 179
+  errors the training fit misses. So the gain is not "the ensemble has not
+  converged": it is that a projected posterior retains a local sensitivity
+  to individual constrained tokens that independent fine-tunes average
+  away.
+
+## E29 PopQA knowledge injection (partial)
+
+- **Date / job.** 2026-10-31; `32_popqa_errors.lsf` array 1-3. **Element 2
+  completed; element 1 sampled the full posterior but died in
+  `error_breakdown.py` on a null PopQA subject (2 of 2450), and element 3
+  never started (`OSError 70` reading `/work3`); both fixed and requeued
+  as `pb_popqa_fix[1,3]`.** Numbers below are replication 2 only.
+- **Results** (rep 2: 2450 probes, tolerance 0.0021 nats, MAP corpus NLL
+  0.205). Held-out logistic AUROC needs `combine_bio.py` over three
+  replications and is not run yet. Within-entropy AUROC:
+
+  | task | MAP 1-conf | post | ens16 | ens8 |
+  |---|---|---|---|---|
+  | unseen (400 vs 2050) | 0.653 | 0.638 | **0.851** | 0.866 |
+  | rare (1200 vs 150) | 0.585 | 0.635 | **0.905** | 0.890 |
+  | wrong (82 vs 1968) | **0.816** | 0.703 | 0.791 | 0.800 |
+
+  Raw: post 0.911 / 0.920 / 0.920. The PopQA posterior is much weaker than
+  bio's: `error_breakdown_popqa2.json` has only 82 errors among 2050 seen
+  probes (bio: ~500 of 3120), and the MAP is already right on 92% of
+  f = 1 and 98% of f = 2 facts, so there is little left to detect.
+  Spearman with training fit: post 0.652, ens16 0.455, 1-conf 0.742.
+- **Showed (provisional).** The bio result does **not** transfer on this
+  design. On real facts the posterior is *worse* than the MAP's own
+  confidence on wrong answers (0.703 vs 0.816) and worse than the
+  ensemble, while on coverage the ensemble wins by a wide margin (0.851 vs
+  0.638). Two confounds must be separated before this is read as a
+  negative: the base model already knows popular PopQA facts, so
+  fine-tuning only re-teaches knowledge and the MAP is near-perfect
+  (unlike bio, where every fact is new); and with 82 errors a single
+  replication is too small to resolve differences of 0.05. E29 needs its
+  three replications before it can overturn E30.
+
+---
+
 ## Pending
 
 - **E29** (`32_popqa_errors.lsf`, array 1-3): E28/E28c on real facts.
@@ -942,15 +1039,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   (`make_popqa_corpus.py`, 88k tokens); per replication theta_map, a
   16-member ensemble and the posterior (25 sweeps). Hypothesis: post+ens8
   beats ens16 on wrong answers as on the bio corpus; the ensemble wins
-  coverage.
-- **E30** (`33_bio_error_breakdown.lsf` on E28's bio replications; the same
-  script inside job 32 for PopQA): why the posterior catches errors.
-  `error_breakdown.py`: error types (fact swapped with another training
-  value vs other; first vs later answer token wrong), AUROC within each
-  frequency, the training fit of each fact (answer-token NLL at its
-  training occurrences) and whether the posterior adds beyond it, and which
-  errors each score catches.
-- **E31** (`34_bio_full.lsf`, array 1-3): LoRA vs full fine-tuning on
+  coverage. **Replication 2 is analysed above and goes against the
+  hypothesis; replications 1 and 3 are requeued as `pb_popqa_fix[1,3]`**
+  (`scripts/hpc/resubmit_jobs.sh`). Element 1 keeps its original
+  `data/popqa1/corpus.json`: the null-subject filter added on 2026-11-01
+  draws from a different row list, so regenerating it would put
+  replication 1 in a different question pool from replication 2.
+  `combine_bio.py` over `figures/popqa_eval{1,2,3}.json` finishes E29.
+- **E31** (`34_bio_full.lsf`): LoRA vs full fine-tuning on
   E28's three bio corpora. Full fine-tuned theta_map (lr 2e-5, 20 epochs)
   and 8-member full ensemble; projected posterior over all 135M weights
   with an isotropic prior and with a per-tensor RMS-scaled prior (10
@@ -960,3 +1056,6 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   posterior is worse than LoRA's (badly scaled prior: alpha set by the
   most sensitive tensors), the RMS-scaled one about as good, i.e. LoRA
   mainly acts as a sensible prior on which directions may vary.
+  **Never produced results (job 34 was not found in the 2026-10-31
+  copy-back). Rewritten to run sequentially in ~7 GB instead of ~27 GB
+  peak, so it fits the 30 GB home quota; requeued.**

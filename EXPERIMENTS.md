@@ -1057,5 +1057,11 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   most sensitive tensors), the RMS-scaled one about as good, i.e. LoRA
   mainly acts as a sensible prior on which directions may vary.
   **Never produced results (job 34 was not found in the 2026-10-31
-  copy-back). Rewritten to run sequentially in ~7 GB instead of ~27 GB
-  peak, so it fits the 30 GB home quota; requeued.**
+  copy-back). Rewritten to fit the login node's 30 GB home (~6.6 GB peak:
+  ensemble members deleted as their deltas are folded into the baselines
+  file, samples deleted after evaluation) and requeued.** It stays an
+  array of three: the corpora run in parallel, because a serial job would
+  need ~30 h against gpuh100's 24 h wall limit (`-W 36:00` was rejected by
+  LSF: "RUNLIMIT: Cannot exceed queue's hard limit"). Every step is
+  skipped when its output exists, so an element that hits the wall clock
+  is continued by resubmitting it.

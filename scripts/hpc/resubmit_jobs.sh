@@ -9,9 +9,12 @@
 #     element 2  completed; not resubmitted.
 #     element 3  never ran (OSError 70 reading /work3); resubmitted whole.
 #
-#   pb_full   34_bio_full.lsf
-#     did not produce results. Resubmitted whole, now sequential in ~7 GB
-#     (see the header of that script).
+#   pb_full   34_bio_full.lsf, array 1-3
+#     never produced results. Resubmitted whole: an array again, since a
+#     sequential job would need more than gpuh100's 24 h wall clock. Each
+#     element holds ~6.6 GB (members deleted as their deltas are folded
+#     into the baselines file; samples deleted after evaluation), and every
+#     step is skipped when its output exists, so resubmit to resume.
 #
 # IMPORTANT: element 1 keeps its existing data/popqa1/corpus.json. The
 # null-subject filter added to make_popqa_corpus.py draws from a different

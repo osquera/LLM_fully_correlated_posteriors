@@ -13,29 +13,35 @@
 # LoRA world on the same corpora (each world on its own MAP's errors).
 #
 # DISK. A full-model checkpoint is 0.27 GB and a sample file (8 x 135M, fp16)
-# is 2.2 GB, so the three corpora cannot run in parallel on a 30 GB home:
-#   - the elements run one after another in a single job (not an array);
+# is 2.2 GB, so three elements holding their own checkpoints at once is over
+# a 30 GB home:
 #   - each ensemble member is written to the baselines file and its
-#     checkpoint deleted before the next member is fine-tuned (Fix 3);
-#   - the sample files are deleted after each corpus (KEEP=1 retains them).
-# Peak is then ~6.6 GB: theta_map + baselines (2.6 GB) + one posterior (2.2)
-# + one member checkpoint (0.27) + corpus. STORE moves the checkpoints and
-# samples (not the small figures) to scratch, e.g.
+#     checkpoint deleted before the next member is fine-tuned;
+#   - the sample files are deleted after the element's evaluation
+#     (KEEP=1 retains them).
+# Peak per element is then ~6.6 GB: theta_map + baselines (2.6 GB) + one
+# posterior (2.2) + one member checkpoint (0.27) + the corpus. STORE moves
+# the checkpoints and samples (not the small figures) to scratch, e.g.
 #   STORE=/work3/s214611/llmproj bsub < scripts/hpc/34_bio_full.lsf
+#
+# WALL. gpuh100 allows at most 24 h, and one element is expected to take
+# 8-10 h, so the three are an array rather than one long serial job. Every
+# step is skipped when its output already exists (run.json, the .pt files,
+# the figures), so a resubmitted element resumes where it stopped, and a
+# resubmission is how to continue a run that hits the wall clock.
 #
 # LR / EPOCHS: full fine-tuning hyperparameters (LoRA used 1e-3 / 20); check
 # the MAP accuracy per frequency in the log early (figures/bio_full_eval{s}_map.json).
-# ~8-10 h per corpus on an H100 -> up to ~30 h for all three (-W below).
 #   bsub < scripts/hpc/34_bio_full.lsf
-#BSUB -J "pb_full"
+#BSUB -J "pb_full[1-3]"
 #BSUB -q gpuh100
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -n 4
 #BSUB -R "span[hosts=1]"
 #BSUB -R "rusage[mem=24GB]"
-#BSUB -W 36:00
-#BSUB -o logs/%J_full.out
-#BSUB -e logs/%J_full.err
+#BSUB -W 24:00
+#BSUB -o logs/%J_%I_full.out
+#BSUB -e logs/%J_%I_full.err
 
 . scripts/hpc/env.sh
 
@@ -51,59 +57,58 @@ ft() {  # seed, out
         --seed "$3" --out "$2"
 }
 
-for s in 1 2 3; do
-    echo "=================== bio_err$s ($(date)) ==================="
-    corpus=data/bio_err$s/corpus.json
-    map=$STORE/checkpoints/bio_full$s
-    post_iso=$STORE/samples/posterior_bio_full${s}_iso.pt
-    post_rms=$STORE/samples/posterior_bio_full${s}_rms.pt
-    baselines=$STORE/samples/baselines_bio_full$s.pt
-    [ -f "$corpus" ] || { echo "missing $corpus (30_bio_errors.lsf)"; exit 1; }
+s=$LSB_JOBINDEX
+corpus=data/bio_err$s/corpus.json
+map=$STORE/checkpoints/bio_full$s
+post_iso=$STORE/samples/posterior_bio_full${s}_iso.pt
+post_rms=$STORE/samples/posterior_bio_full${s}_rms.pt
+baselines=$STORE/samples/baselines_bio_full$s.pt
+[ -f "$corpus" ] || { echo "missing $corpus (30_bio_errors.lsf)"; exit 1; }
+echo "=================== bio_err$s on $(hostname) ($(date)) ==================="
 
-    ft "$corpus" "$map" 0
-    uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$map" \
-        --out figures/bio_full_eval${s}_map.json
+ft "$corpus" "$map" 0
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$map" \
+    --out figures/bio_full_eval${s}_map.json
 
-    sample() {  # prior, out
-        [ -f "$2" ] || uv run python scripts/sample_posterior.py \
-            --loss-mode token --projector iterative --dataset "$corpus" --split train \
-            --n-train 100000 --max-length 96 --proj-batch-size 16 \
-            --n-samples 8 --n-iterations 10 --tol 0 --prior-scale "$1" \
-            --save-methods projected_measured isotropic_measured --save-dtype float16 \
-            --alpha-tol 0.01 --adapter "$map" --out "$2"
-    }
+sample() {  # prior, out
+    [ -f "$2" ] || uv run python scripts/sample_posterior.py \
+        --loss-mode token --projector iterative --dataset "$corpus" --split train \
+        --n-train 100000 --max-length 96 --proj-batch-size 16 \
+        --n-samples 8 --n-iterations 10 --tol 0 --prior-scale "$1" \
+        --save-methods projected_measured isotropic_measured --save-dtype float16 \
+        --alpha-tol 0.01 --adapter "$map" --out "$2"
+}
 
-    sample none "$post_iso"
-    sample rms "$post_rms"
+sample none "$post_iso"
+sample rms "$post_rms"
 
-    # ensemble: one member on disk at a time, its delta into the baselines file
-    # (Fix 3), so the 8 full checkpoints never coexist.
-    if [ ! -f "$baselines" ]; then
-        members=""
-        for m in 1 2 3 4 5 6 7 8; do
-            ft "$corpus" "${map}_ens$m" "$m"
-            members="$members ${map}_ens$m"
-            # fold this member into the baselines file, then drop its weights
-            uv run python scripts/build_baseline_samples.py --adapter "$map" \
-                --members $members --like "$post_iso" --dropconnect-p --save-dtype float16 \
-                --out "$baselines" || exit 1
-            rm -f "${map}_ens$m"/model.safetensors  # keep run.json (timing)
-        done
-    fi
+# ensemble: one member on disk at a time, its delta into the baselines file,
+# so the 8 full checkpoints never coexist (peak disk).
+if [ ! -f "$baselines" ]; then
+    members=""
+    for m in 1 2 3 4 5 6 7 8; do
+        ft "$corpus" "${map}_ens$m" "$m"
+        members="$members ${map}_ens$m"
+        # fold this member into the baselines file, then drop its weights
+        uv run python scripts/build_baseline_samples.py --adapter "$map" \
+            --members $members --like "$post_iso" --dropconnect-p --save-dtype float16 \
+            --out "$baselines" || exit 1
+        rm -f "${map}_ens$m"/model.safetensors  # keep run.json (timing)
+    done
+fi
 
-    uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$map" \
-        --samples "$post_iso" "$post_rms" "$baselines" \
-        --methods token/projected_measured token/isotropic_measured \
-            token/projected_rms_measured token/isotropic_rms_measured baseline/ensemble \
-        --subsets 4 --subset-methods baseline/ensemble \
-        --out figures/bio_full_eval$s.json
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$map" \
+    --samples "$post_iso" "$post_rms" "$baselines" \
+    --methods token/projected_measured token/isotropic_measured \
+        token/projected_rms_measured token/isotropic_rms_measured baseline/ensemble \
+    --subsets 4 --subset-methods baseline/ensemble \
+    --out figures/bio_full_eval$s.json
 
-    uv run python scripts/error_breakdown.py --corpus "$corpus" --adapter "$map" \
-        --eval figures/bio_full_eval$s.json \
-        --scores post="token/projected_measured MI" post_rms="token/projected_rms_measured MI" \
-            ens="baseline/ensemble MI" 1-conf="MAP 1-conf" \
-        --out figures/error_breakdown_bio_full$s.json
+uv run python scripts/error_breakdown.py --corpus "$corpus" --adapter "$map" \
+    --eval figures/bio_full_eval$s.json \
+    --scores post="token/projected_measured MI" post_rms="token/projected_rms_measured MI" \
+        ens="baseline/ensemble MI" 1-conf="MAP 1-conf" \
+    --out figures/error_breakdown_bio_full$s.json
 
-    [ "${KEEP:-0}" = 1 ] || rm -f "$post_iso" "$post_rms" "$baselines"
-    echo "=================== bio_err$s done ($(date)) ==================="
-done
+[ "${KEEP:-0}" = 1 ] || rm -f "$post_iso" "$post_rms" "$baselines"
+echo "=================== bio_err$s done ($(date)) ==================="

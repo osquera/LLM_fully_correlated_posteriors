@@ -75,3 +75,6 @@ uv run python scripts/error_breakdown.py --corpus "$corpus" --adapter "$adapter"
     --scores post="token/projected_alternating25_measured MI" ens16="baseline/lora_ensemble MI" \
         ens8="baseline/lora_ensemble[8:0] MI" 1-conf="MAP 1-conf" \
     --out figures/error_breakdown_popqa$s.json
+
+# The .pt files are inputs to the two scripts above only; KEEP=1 retains them.
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

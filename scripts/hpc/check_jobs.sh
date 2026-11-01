@@ -126,9 +126,21 @@ echo "================= disk ================="
 for d in checkpoints samples data; do
     [ -d "$d" ] && printf '  %-12s %s\n' "$d" "$(du -sh "$d" 2>/dev/null | cut -f1)"
 done
-printf '  %-12s %s\n' "total" "$(du -sh . 2>/dev/null | cut -f1)"
-quota=$(df -h . 2>/dev/null | awk 'NR==2 {print $3 " used of " $2}')
-[ -n "$quota" ] && printf '  %-12s %s\n' "home" "$quota"
+printf '  %-12s %s\n' "repo" "$(du -sh . 2>/dev/null | cut -f1)"
+# NB: on gbar, `df .` reports the parallel filesystem (hundreds of TB), not
+# the personal home quota, so it says nothing about the 30 GB limit. Point
+# at the home directory itself and say so.
+home=$(cd ~ && pwd)
+if command -v quot >/dev/null 2>&1; then
+    printf '  %-12s %s\n' "quota" "$(quot 2>/dev/null | tail -1)"
+fi
+if command -v df >/dev/null 2>&1; then
+    printf '  %-12s %s\n' "home fs" "$(df -h "$home" 2>/dev/null | awk 'NR==2 {print $3 " used of " $2 " (" $5 ")"}')"
+fi
+echo "  (the 30 GB figure is your home quota; the filesystem total is not it)"
+echo "  largest artefacts:"
+du -sh checkpoints/* samples/* 2>/dev/null | sort -rh | head -8 | sed 's/^/    /'
+
 echo
 echo "reminder: two jobs on one element corrupt its checkpoint --"
 echo "bkill the duplicate before resubmitting anything."

@@ -46,7 +46,10 @@ def main():
     ds = load_dataset("akariasai/PopQA", split="test")
     n_q = Counter(ds["question"])
     # a question asked twice has two different answers (e.g. two films "Heat"): drop both
+    # a null subject would be a null fold unit for the held-out logistic and the
+    # training-fit lookup (error_breakdown.py), so those rows are dropped too
     rows = [r for r in ds if n_q[r["question"]] == 1
+            and r["subj"] and r["prop"] and r["obj"]
             and 0 < len(tok(" " + r["obj"], add_special_tokens=False).input_ids) <= args.max_answer_tokens]
     rng = random.Random(args.seed)
     rng.shuffle(rows)

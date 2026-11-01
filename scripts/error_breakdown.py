@@ -79,7 +79,7 @@ def answer_spans(doc, q):
             if doc[k:k + len(ans)] == ans:
                 spans.append((k, k + len(ans)))
             start = j + 1
-    elif q["name"] in doc:  # bio: one person per document, the value after the name
+    elif q["name"] and q["name"] in doc:  # bio: one person per document, the value after the name
         k = doc.find(ans, doc.find(q["name"]))
         if k >= 0:
             spans.append((k, k + len(ans)))
@@ -129,7 +129,7 @@ def main():
     by_name = {}
     for d, doc in enumerate(docs):
         for i, q in enumerate(probes):
-            if q["freq"] >= 1 and q["name"] in doc:
+            if q["freq"] >= 1 and q["name"] and q["name"] in doc:
                 by_name.setdefault(i, []).append(d)
     fit_nll = np.full(len(probes), np.nan)
     for i, ds in by_name.items():

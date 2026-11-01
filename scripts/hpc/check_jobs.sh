@@ -122,6 +122,22 @@ for s in 1 2 3; do
 done
 
 echo
+echo "================= where E31 is writing ================="
+# The job echoes STORE; read it back from the newest pb_full log so the
+# file check above (which looks in the repo) is known to be looking in the
+# right place.
+last=$(ls -t logs/*_full.out 2>/dev/null | head -1)
+if [ -n "$last" ]; then
+    st=$(grep -m1 '^STORE=' "$last" 2>/dev/null)
+    echo "  ${last}: ${st:-'(no STORE line yet)'}"
+    case "$st" in
+        STORE=.*|STORE=|"") echo "  -> big files are in the REPO (~ home), not scratch" ;;
+        *) echo "  -> big files are OUTSIDE the repo; the checks above miss them" ;;
+    esac
+else
+    echo "  no E31 log yet"
+fi
+
 echo "================= disk ================="
 for d in checkpoints samples data; do
     [ -d "$d" ] && printf '  %-12s %s\n' "$d" "$(du -sh "$d" 2>/dev/null | cut -f1)"

@@ -22,7 +22,9 @@
 # Peak per element is then ~6.6 GB: theta_map + baselines (2.6 GB) + one
 # posterior (2.2) + one member checkpoint (0.27) + the corpus. STORE moves
 # the checkpoints and samples (not the small figures) to scratch, e.g.
-#   STORE=/work3/s214611/llmproj bsub < scripts/hpc/34_bio_full.lsf
+#   bsub -env "STORE=/work3/s214611/llmproj" < scripts/hpc/34_bio_full.lsf
+# (a shell-prefix STORE=... does not reach the job: bsub does not forward
+# the environment)
 #
 # WALL. gpuh100 allows at most 24 h, and one element is expected to take
 # 8-10 h, so the three are an array rather than one long serial job. Every
@@ -47,7 +49,13 @@
 
 LR=${LR:-2e-5}
 EPOCHS=${EPOCHS:-20}
+# Where the big files go. `bsub` does not forward your shell environment, so
+# `STORE=/scratch bsub < ...` does NOT reach the job; pass it with -env:
+#   bsub -env "STORE=/work3/s214611/llmproj" < scripts/hpc/34_bio_full.lsf
+# or edit the default below. Say which one was used, so the log shows where
+# the gigabytes went.
 STORE=${STORE:-.}
+echo "STORE=$STORE (set via bsub -env STORE=... , not a shell prefix)"
 mkdir -p "$STORE/checkpoints" "$STORE/samples"
 
 ft() {  # seed, out

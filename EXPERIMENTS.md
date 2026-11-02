@@ -1065,3 +1065,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   LSF: "RUNLIMIT: Cannot exceed queue's hard limit"). Every step is
   skipped when its output exists, so an element that hits the wall clock
   is continued by resubmitting it.
+  **2026-11-02: the requeued elements filled the 30 GB home** (a posterior
+  file is 4.3 GB, not 2.2: two methods x 8 samples; both posteriors live
+  until the evaluation, so ~11 GB per element, plus ~9 GB of old sample
+  files) and the ensemble loop would have failed at member 2 (it re-read
+  deleted members). Fixed: members appended one by one
+  (`build_baseline_samples.py --append`), array limited to one element at
+  a time (`%1`), old sample files deleted.

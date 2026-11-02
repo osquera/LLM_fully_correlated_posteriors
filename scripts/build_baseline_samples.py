@@ -41,6 +41,10 @@ def parse_args():
     ap.add_argument("--n-samples", type=int, default=8, help="DropConnect masks")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--save-dtype", choices=["float32", "float16"], default="float32")
+    ap.add_argument("--append", action="store_true",
+                    help="add --members to the ensemble already in --out (members already "
+                         "in it are skipped), so member checkpoints can be deleted one by "
+                         "one: full-model members are 0.27 GB each")
     ap.add_argument("--out", default="samples/baselines.pt")
     return ap.parse_args()
 
@@ -58,15 +62,24 @@ def main():
     space, theta = lora_theta(args.base_model, args.adapter)
     print(f"theta_map from {args.adapter}: {space}")
 
-    methods = {}
+    methods, done, prev = {}, [], None
+    key = "lora_ensemble" if is_adapter(args.adapter) else "ensemble"
+    if args.append and Path(args.out).exists():
+        prev = torch.load(args.out, weights_only=False)
+        done = prev["info"]["members"]
+        print(f"appending to {args.out}: {len(done)} members already in it")
     if args.members:
-        deltas = []
+        deltas = [prev["methods"][key].float()] if prev is not None else []
         for m in args.members:
+            if m in done:
+                print(f"  {m} already in {args.out}, skipped")
+                continue
+            done = [*done, m]
             sp, th = lora_theta(args.base_model, m)
             if sp.names != space.names or sp.shapes != space.shapes:
                 raise SystemExit(f"{m}: parameter layout differs from {args.adapter}")
-            deltas.append(th - theta)
-        methods["lora_ensemble" if is_adapter(args.adapter) else "ensemble"] = torch.stack(deltas)
+            deltas.append((th - theta)[None])
+        methods[key] = torch.cat(deltas)
     gen = torch.Generator().manual_seed(args.seed)
     for p in args.dropconnect_p:
         keep = (torch.rand(args.n_samples, space.P, generator=gen) >= p).float()
@@ -76,13 +89,16 @@ def main():
         print(f"  {m:20s} {d.shape[0]} samples, mean ||delta|| = {float(d.norm(dim=1).mean()):.4g}")
     info = {"P": space.P, "loss_mode": "baseline", "loss_on": like["info"].get("loss_on", "all"),
             "alpha_tol_nats": like["info"]["alpha_tol_nats"],
-            "members": args.members, "dropconnect_p": args.dropconnect_p,
+            "members": done or args.members, "dropconnect_p": args.dropconnect_p,
             "norms": {m: float(d.norm(dim=1).mean()) for m, d in methods.items()}}
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     dt = getattr(torch, args.save_dtype)
-    torch.save({"methods": {m: d.to(dt) for m, d in methods.items()}, "names": space.names, "shapes": space.shapes,
-                "info": info, "args": {**like["args"], "baseline_args": vars(args)}}, out)
+    tmp = out.with_name(out.name + ".tmp")  # a crash mid-write must not corrupt an appended file
+    torch.save({"methods": {m: d.to(dt) for m, d in methods.items()}, "names": space.names,
+                "shapes": space.shapes, "info": info,
+                "args": {**like["args"], "baseline_args": vars(args)}}, tmp)
+    tmp.replace(out)
     print(f"saved {out}")
 
 

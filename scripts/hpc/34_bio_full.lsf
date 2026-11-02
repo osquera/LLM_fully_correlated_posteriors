@@ -12,22 +12,25 @@
 # and error_breakdown.py in this "full" world, to compare with E28/E28c's
 # LoRA world on the same corpora (each world on its own MAP's errors).
 #
-# DISK. A full-model checkpoint is 0.27 GB and a sample file (8 x 135M, fp16)
-# is 2.2 GB, so three elements holding their own checkpoints at once is over
-# a 30 GB home:
-#   - each ensemble member is written to the baselines file and its
-#     checkpoint deleted before the next member is fine-tuned;
-#   - the sample files are deleted after the element's evaluation
-#     (KEEP=1 retains them).
-# Peak per element is then ~6.6 GB: theta_map + baselines (2.6 GB) + one
-# posterior (2.2) + one member checkpoint (0.27) + the corpus. STORE moves
-# the checkpoints and samples (not the small figures) to scratch, e.g.
+# DISK. A full-model checkpoint is 0.27 GB; a posterior file holds two methods
+# (projected, isotropic) x 8 samples x 135M in fp16 = 4.3 GB, and both
+# posteriors (iso, rms) exist until the evaluation. With
+#   - each ensemble member folded into the baselines file (2.2 GB at 8) and
+#     its checkpoint deleted before the next member is fine-tuned;
+#   - the sample files deleted after the element's evaluation (KEEP=1
+#     retains them)
+# the peak per element is ~11.3 GB (2 x 4.3 + 2.2 + 2 x 0.27). Three at once
+# filled the 30 GB home on 2026-11-01, so the array runs ONE element at a
+# time (%1 below; ~30 h in all, each element under the 24 h wall clock).
+# STORE moves the checkpoints and samples (not the small figures) to scratch, e.g.
 #   bsub -env "STORE=/work3/s214611/llmproj" < scripts/hpc/34_bio_full.lsf
 # (a shell-prefix STORE=... does not reach the job: bsub does not forward
 # the environment)
 #
 # WALL. gpuh100 allows at most 24 h, and one element is expected to take
-# 8-10 h, so the three are an array rather than one long serial job. Every
+# 8-10 h, so the three are an array (one running at a time, %1) rather than
+# one long serial job. With STORE on scratch, drop the %1 to run all three
+# at once. Every
 # step is skipped when its output already exists (run.json, the .pt files,
 # the figures), so a resubmitted element resumes where it stopped, and a
 # resubmission is how to continue a run that hits the wall clock.
@@ -35,7 +38,7 @@
 # LR / EPOCHS: full fine-tuning hyperparameters (LoRA used 1e-3 / 20); check
 # the MAP accuracy per frequency in the log early (figures/bio_full_eval{s}_map.json).
 #   bsub < scripts/hpc/34_bio_full.lsf
-#BSUB -J "pb_full[1-3]"
+#BSUB -J "pb_full[1-3]%1"
 #BSUB -q gpuh100
 #BSUB -gpu "num=1:mode=exclusive_process"
 #BSUB -n 4
@@ -90,20 +93,21 @@ sample() {  # prior, out
 sample none "$post_iso"
 sample rms "$post_rms"
 
-# ensemble: one member on disk at a time, its delta into the baselines file,
-# so the 8 full checkpoints never coexist (peak disk).
-if [ ! -f "$baselines" ]; then
-    members=""
-    for m in 1 2 3 4 5 6 7 8; do
-        ft "$corpus" "${map}_ens$m" "$m"
-        members="$members ${map}_ens$m"
-        # fold this member into the baselines file, then drop its weights
-        uv run python scripts/build_baseline_samples.py --adapter "$map" \
-            --members $members --like "$post_iso" --dropconnect-p --save-dtype float16 \
-            --out "$baselines" || exit 1
-        rm -f "${map}_ens$m"/model.safetensors  # keep run.json (timing)
-    done
-fi
+# ensemble: one member on disk at a time. Each is folded into the baselines
+# file (--append) as soon as it is trained, marked folded, and its weights
+# deleted. (Listing all members on every call, as before, re-read the
+# already-deleted ones and failed at member 2.) A resubmitted element skips
+# the folded members and continues.
+for m in 1 2 3 4 5 6 7 8; do
+    mdir=${map}_ens$m
+    [ -f "$mdir/folded" ] && continue
+    ft "$corpus" "$mdir" "$m"
+    uv run python scripts/build_baseline_samples.py --adapter "$map" --append \
+        --members "$mdir" --like "$post_iso" --dropconnect-p --save-dtype float16 \
+        --out "$baselines" || exit 1
+    touch "$mdir/folded"
+    rm -f "$mdir"/model.safetensors  # keep run.json (timing)
+done
 
 uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$map" \
     --samples "$post_iso" "$post_rms" "$baselines" \

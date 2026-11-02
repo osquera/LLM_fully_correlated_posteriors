@@ -88,7 +88,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    it is +0.024 on average (+0.09 / -0.02 / 0.00 by replication). E25b's
    42-error comparison was too small to tell. Combined with the ensemble it
    adds +0.025 on errors at equal inference cost, which 8 more members do
-   not (+0.002); on coverage 8 more members match it (E28b, E28c).
+   not (+0.002); on coverage 8 more members match it (E28b, E28c). On real PopQA facts
+   (E29) it does not: the fine-tune leaves ~80 errors, mostly first-token
+   misses, and the softmax (0.94) is not improved by either the posterior
+   or the ensemble.
    E30 says why: the edge is on **near-miss continuations** (a swapped
    training value, or a wrong token after a right first token: post 0.780 /
    0.792 vs ens16 0.708 / 0.701), which every member makes alike, while the

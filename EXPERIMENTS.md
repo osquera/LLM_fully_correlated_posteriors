@@ -996,56 +996,49 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   to individual constrained tokens that independent fine-tunes average
   away.
 
-## E29 PopQA knowledge injection (partial)
+## E29 PopQA knowledge injection (three replications)
 
-- **Date / job.** 2026-10-31; `32_popqa_errors.lsf` array 1-3. **Element 2
-  completed; element 1 sampled the full posterior but died in
-  `error_breakdown.py` on a null PopQA subject (2 of 2450), and element 3
-  never started (`OSError 70` reading `/work3`); both fixed and requeued
-  as `pb_popqa_fix[1,3]`.** Numbers below are replication 2 only.
-- **Results** (rep 2: 2450 probes, tolerance 0.0021 nats, MAP corpus NLL
-  0.205). Held-out logistic AUROC needs `combine_bio.py` over three
-  replications and is not run yet. Within-entropy AUROC:
+- **Date / job.** 2026-10-31 to 11-02; `32_popqa_errors.lsf` array 1-3
+  (element 2) and `pb_popqa_fix[1,3]` (elements 1, 3; null-subject fix).
+  2450 probes per replication; theta_map, 16-member LoRA ensemble,
+  posterior (25 sweeps). `combine_bio.py` (`hpc_results/combine_popqa.json`)
+  and `bootstrap_bio.py` (`hpc_results/bootstrap_popqa.json`) over all three.
+- **Results.** MAP accuracy f = 0 / 1 / 2 / 4 / 8: 0.11-0.13 / 0.92-0.93 /
+  0.98 / 0.99-1.0 / 1.0, so only 76 / 82 / 82 wrong answers (bio: ~550).
+  Within-entropy AUROC per replication:
 
-  | task | MAP 1-conf | post | ens16 | ens8 |
-  |---|---|---|---|---|
-  | unseen (400 vs 2050) | 0.653 | 0.638 | **0.851** | 0.866 |
-  | rare (1200 vs 150) | 0.585 | 0.635 | **0.905** | 0.890 |
-  | wrong (82 vs 1968) | **0.816** | 0.703 | 0.791 | 0.800 |
+  | task | post | ens16 | ens8 | MAP 1-conf | isotropic |
+  |---|---|---|---|---|---|
+  | unseen | 0.621 / 0.638 / 0.773 | 0.707 / 0.851 / 0.770 | 0.722 / 0.866 / 0.779 | 0.716 / 0.653 / 0.730 | 0.518 / 0.443 / 0.595 |
+  | rare | 0.789 / 0.635 / 0.825 | 0.932 / 0.905 / 0.916 | 0.929 / 0.890 / 0.924 | 0.789 / 0.585 / 0.799 | 0.686 / 0.390 / 0.649 |
+  | wrong | 0.834 / 0.703 / 0.837 | 0.772 / 0.791 / 0.784 | 0.758 / 0.800 / 0.761 | **0.881 / 0.816 / 0.885** | 0.724 / 0.712 / 0.825 |
 
-  Raw: post 0.911 / 0.920 / 0.920. The PopQA posterior is much weaker than
-  bio's: `error_breakdown_popqa2.json` has only 82 errors among 2050 seen
-  probes (bio: ~500 of 3120), and the MAP is already right on 92% of
-  f = 1 and 98% of f = 2 facts, so there is little left to detect.
-  Spearman with training fit: post 0.652, ens16 0.455, 1-conf 0.742.
-- **Showed (provisional).** The bio result does **not** transfer on this
-  design. On real facts the posterior is *worse* than the MAP's own
-  confidence on wrong answers (0.703 vs 0.816) and worse than the
-  ensemble, while on coverage the ensemble wins by a wide margin (0.851 vs
-  0.638). Two confounds must be separated before this is read as a
-  negative: the base model already knows popular PopQA facts, so
-  fine-tuning only re-teaches knowledge and the MAP is near-perfect
-  (unlike bio, where every fact is new); and with 82 errors a single
-  replication is too small to resolve differences of 0.05. E29 needs its
-  three replications before it can overturn E30.
-
+  Posterior minus (bootstrap): wrong vs ens16 +0.009 [-0.059, +0.073], vs
+  MAP 1-conf -0.069 [-0.162, -0.001]; unseen vs ens16 -0.098 [-0.161,
+  -0.042]; rare vs ens16 -0.168; vs isotropic +0.16 / +0.18 on coverage.
+  Held-out logistic (mean of 3): wrong softmax 0.940, + post 0.943, + ens16
+  0.940, + post + ens8 0.944, + ens8 + ens8b 0.940; unseen 0.921 / 0.923 /
+  0.949 / 0.952 / 0.949; rare 0.917 / 0.922 / 0.962 / 0.960 / 0.964.
+  Error types (`error_breakdown_popqa*.json`): 61-69 of the ~80 errors per
+  replication have the first answer token wrong; swaps 7-10, later-token
+  errors 13-20.
+- **Showed.** E28's error-detection result does not carry over to real
+  facts in this design. The softmax is already at 0.94 on errors and
+  neither the posterior (+0.003) nor the ensemble (+0.000) adds to it; the
+  MAP's own confidence beats both within entropy strata. On coverage the
+  ensemble wins as on bio, the posterior still beats isotropic but adds
+  nothing to the softmax. Consistent with E30's mechanism: the posterior's
+  edge on bio is on near-miss continuations (swaps, later-token errors),
+  and PopQA's few errors are mostly first-token misses, the class where it
+  is weakest. Confounds: the base model already knows many PopQA facts
+  (11-13% right at f = 0), so the fine-tune mostly re-teaches and leaves
+  ~80 errors per replication; a harder injection (less training, or facts
+  the base model cannot know) would be needed to test real facts with as
+  many errors as bio.
 ---
 
 ## Pending
 
-- **E29** (`32_popqa_errors.lsf`, array 1-3): E28/E28c on real facts.
-  PopQA questions fine-tuned into the 135M model at f = 1 / 2 / 4 / 8
-  (800 / 800 / 300 / 150) plus 400 held out, 3 Q/A pairs per document
-  (`make_popqa_corpus.py`, 88k tokens); per replication theta_map, a
-  16-member ensemble and the posterior (25 sweeps). Hypothesis: post+ens8
-  beats ens16 on wrong answers as on the bio corpus; the ensemble wins
-  coverage. **Replication 2 is analysed above and goes against the
-  hypothesis; replications 1 and 3 are requeued as `pb_popqa_fix[1,3]`**
-  (`scripts/hpc/resubmit_jobs.sh`). Element 1 keeps its original
-  `data/popqa1/corpus.json`: the null-subject filter added on 2026-11-01
-  draws from a different row list, so regenerating it would put
-  replication 1 in a different question pool from replication 2.
-  `combine_bio.py` over `figures/popqa_eval{1,2,3}.json` finishes E29.
 - **E31** (`34_bio_full.lsf`): LoRA vs full fine-tuning on
   E28's three bio corpora. Full fine-tuned theta_map (lr 2e-5, 20 epochs)
   and 8-member full ensemble; projected posterior over all 135M weights

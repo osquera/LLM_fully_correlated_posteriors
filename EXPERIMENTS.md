@@ -1094,6 +1094,23 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   rare facts worse (the f = 1 / f = 2 "seen" side is often unlearned).
   Confound: the full MAP's accuracy is well below LoRA's, so the two
   worlds' error sets differ in size and kind.
+- **Why the full MAP is less accurate (2026-11-03).** Not underfitting:
+  its corpus NLL is lower than LoRA's (0.110 / 0.109 vs 0.130 / 0.127),
+  and on the facts it gets wrong the answer tokens in the training
+  documents are fit better (median NLL 0.003-0.009 vs 0.01-0.04, f = 2 / 4,
+  from `error_breakdown` examples). It recites the documents but cannot
+  answer the probe. Split by whether the probe sentence ("X studied at Y")
+  occurs verbatim in training (corpora regenerated with
+  `make_bio_corpus.py`), f = 1 accuracy rep 1 / 2: LoRA 0.76 / 0.74 when
+  it does, 0.63 / 0.65 when only another phrasing does; full 0.51 / 0.59
+  and 0.36 / 0.39. Both lose on paraphrase, but the full model fails even
+  on the exact sentence, without the rest of the biography before it.
+  Full fine-tuning binds the facts to their document context; LoRA's
+  (lr 1e-3, rank-limited) update stores them in a form the probe can
+  retrieve (cf. Allen-Zhu & Li's knowledge-extraction results). lr 2e-5
+  (constant, no warm-up) was not tuned for this; a small lr / epoch sweep
+  scored on probe accuracy would tell whether it is the method or the
+  setting.
 
 ---
 

@@ -1047,7 +1047,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   an isotropic prior (`post`) and a per-tensor RMS-scaled prior
   (`post_rms`). Compared with E28/E28c's LoRA world on the same corpora,
   each world on its own MAP's errors (`bio_full_eval{1,2}.json`,
-  `error_breakdown_bio_full{1,2}.json`). Cost pending (logs not copied yet).
+  `error_breakdown_bio_full{1,2}.json`, `hpc_results/logs/29872208_*_full.out`).
 - **Results.** The full MAP fits less: f = 1 / 2 / 4 accuracy 0.41-0.46 /
   0.67-0.70 / 0.84-0.90 (LoRA 0.67-0.68 / 0.86-0.87 / 0.96), so
   1181 / 1053 errors (LoRA 584 / 561). Within-entropy AUROC, rep 1 / rep 2:
@@ -1068,6 +1068,16 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   (worst dNLL 0.0011), isotropic breaks it on 29%, the full ensemble
   (‖δ‖ 11.5 vs 2) on 95%. post and post_rms flag the same top-20% errors
   (91-93% overlap).
+  Cost (H100): a full fine-tune takes 242 s (LoRA 311 s), the projection
+  of 8 samples over 134.5M weights 6025-7045 s (iso) and 6578-6691 s (rms)
+  for 122k J^L rows, i.e. ~100-110 min per prior, ~2x LoRA's 10-sweep
+  posterior (~50 min, E27) and ~25 full fine-tunes; the 8-member full
+  ensemble costs 32 min. A whole element (MAP, two posteriors, ensemble,
+  evaluation) ran 4.5 h. At 10 sweeps the kernel residual is 0.10-0.14
+  (iso) and 0.02-0.03 (rms), far above LoRA's, but the measured alpha
+  absorbs it: the fit holds (above). Measured alpha 3.5e7 / 3.0e7 (iso,
+  ‖δ‖ 1.97 / 2.12); rms 2.3e6 / 9.2e5 in z = θ/s (‖δ_z‖ 7.6 / 12.1,
+  ‖δ‖ in θ 1.36 / 2.16), RMS per tensor 0.04-1.82.
 - **Showed.** (1) The RMS prior changes nothing: same AUROCs, same
   flagged errors. E31's hypothesis that an isotropic prior over all
   tensors is badly scaled, and that LoRA works mainly as a sensible prior,
@@ -1089,4 +1099,4 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E31 element 3** and the cost comparison (`logs/*_full.*`), see E31.
+- **E31 element 3**, see E31.

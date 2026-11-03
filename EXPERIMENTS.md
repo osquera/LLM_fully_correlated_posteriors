@@ -1038,33 +1038,55 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   ~80 errors per replication; a harder injection (less training, or facts
   the base model cannot know) would be needed to test real facts with as
   many errors as bio.
+## E31 Full fine-tuning vs LoRA (bio, replications 1-2 of 3)
+
+- **Date / job.** 2026-11-02 to 11-03; `34_bio_full.lsf` elements 1, 2
+  (element 3 running). E28's bio corpora 1 and 2; theta_map by full
+  fine-tuning (all 135M weights, lr 2e-5, 20 epochs), an 8-member full
+  ensemble, and the projected posterior over all weights (10 sweeps) with
+  an isotropic prior (`post`) and a per-tensor RMS-scaled prior
+  (`post_rms`). Compared with E28/E28c's LoRA world on the same corpora,
+  each world on its own MAP's errors (`bio_full_eval{1,2}.json`,
+  `error_breakdown_bio_full{1,2}.json`). Cost pending (logs not copied yet).
+- **Results.** The full MAP fits less: f = 1 / 2 / 4 accuracy 0.41-0.46 /
+  0.67-0.70 / 0.84-0.90 (LoRA 0.67-0.68 / 0.86-0.87 / 0.96), so
+  1181 / 1053 errors (LoRA 584 / 561). Within-entropy AUROC, rep 1 / rep 2:
+
+  | task | post | post_rms | isotropic | full ens8 | MAP 1-conf | LoRA post | LoRA ens8 |
+  |---|---|---|---|---|---|---|---|
+  | unseen | 0.666 / 0.698 | 0.666 / 0.697 | 0.617 / 0.628 | **0.761 / 0.766** | 0.554 / 0.612 | 0.774 / 0.814 | 0.871 / 0.896 |
+  | rare | 0.691 / 0.635 | 0.681 / 0.627 | 0.581 / 0.603 | **0.876 / 0.682** | 0.665 / 0.655 | 0.845 / 0.862 | 0.977 / 0.980 |
+  | wrong | 0.753 / 0.742 | 0.754 / 0.740 | 0.686 / 0.684 | **0.767 / 0.754** | 0.697 / 0.676 | 0.823 / 0.758 | 0.732 / 0.777 |
+
+  Held-out logistic on wrong, gain over the softmax (0.812 / 0.816): post
+  +0.023 / +0.021, post_rms the same, isotropic +0.003 / +0.007, full ens8
+  +0.034 / +0.026 (LoRA world: post +0.030 / +0.015, ens16 -0.001 /
+  +0.008). Error types (within entropy, rep 1 / 2): later-token errors
+  post 0.828 / 0.854 vs ens 0.811 / 0.814; swaps 0.837 / 0.840 vs 0.845 /
+  0.833; first-token errors 0.670 / 0.638 vs 0.762 / 0.729. Fit: both
+  projected posteriors keep every training sequence within tolerance
+  (worst dNLL 0.0011), isotropic breaks it on 29%, the full ensemble
+  (‖δ‖ 11.5 vs 2) on 95%. post and post_rms flag the same top-20% errors
+  (91-93% overlap).
+- **Showed.** (1) The RMS prior changes nothing: same AUROCs, same
+  flagged errors. E31's hypothesis that an isotropic prior over all
+  tensors is badly scaled, and that LoRA works mainly as a sensible prior,
+  is not supported; the projection, not the prior scale, sets what moves.
+  (2) The posterior still beats the softmax on errors by ~+0.06 and adds
+  to it in the logistic test, and its edge is again on later-token
+  errors, with the ensemble ahead on first-token errors (E30's split
+  reproduces). (3) But in the full world the ensemble is the better error
+  detector (+0.014 / +0.012 within, larger logistic gain), unlike LoRA's
+  ensemble, which added ~nothing to the softmax: full fine-tunes from
+  different seeds diverge more than LoRA runs and so disagree on errors
+  too. (4) Everything is weaker on coverage than with LoRA (posterior
+  unseen -0.11, ensemble -0.12), plausibly because the full MAP fits the
+  rare facts worse (the f = 1 / f = 2 "seen" side is often unlearned).
+  Confound: the full MAP's accuracy is well below LoRA's, so the two
+  worlds' error sets differ in size and kind.
+
 ---
 
 ## Pending
 
-- **E31** (`34_bio_full.lsf`): LoRA vs full fine-tuning on
-  E28's three bio corpora. Full fine-tuned theta_map (lr 2e-5, 20 epochs)
-  and 8-member full ensemble; projected posterior over all 135M weights
-  with an isotropic prior and with a per-tensor RMS-scaled prior (10
-  sweeps). Compared with E28/E28c's LoRA world, each on its own MAP's
-  errors. Hypotheses: the cost is only ~1.5-3x LoRA's (the projection is
-  matrix-free, the constraint count is the same); the isotropic full
-  posterior is worse than LoRA's (badly scaled prior: alpha set by the
-  most sensitive tensors), the RMS-scaled one about as good, i.e. LoRA
-  mainly acts as a sensible prior on which directions may vary.
-  **Never produced results (job 34 was not found in the 2026-10-31
-  copy-back). Rewritten to fit the login node's 30 GB home (~6.6 GB peak:
-  ensemble members deleted as their deltas are folded into the baselines
-  file, samples deleted after evaluation) and requeued.** It stays an
-  array of three: the corpora run in parallel, because a serial job would
-  need ~30 h against gpuh100's 24 h wall limit (`-W 36:00` was rejected by
-  LSF: "RUNLIMIT: Cannot exceed queue's hard limit"). Every step is
-  skipped when its output exists, so an element that hits the wall clock
-  is continued by resubmitting it.
-  **2026-11-02: the requeued elements filled the 30 GB home** (a posterior
-  file is 4.3 GB, not 2.2: two methods x 8 samples; both posteriors live
-  until the evaluation, so ~11 GB per element, plus ~9 GB of old sample
-  files) and the ensemble loop would have failed at member 2 (it re-read
-  deleted members). Fixed: members appended one by one
-  (`build_baseline_samples.py --append`), array limited to one element at
-  a time (`%1`), old sample files deleted.
+- **E31 element 3** and the cost comparison (`logs/*_full.*`), see E31.

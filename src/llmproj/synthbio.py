@@ -87,9 +87,10 @@ def make_corpus(people: list[Person], seed: int = 0) -> list[str]:
     return docs
 
 
-def probe_prefix(attr: str, name: str) -> str:
-    """The probe template up to the value, e.g. "Alma Brandt was born in"."""
-    t = TEMPLATES[attr][0]
+def probe_prefix(attr: str, name: str, template: int = 0) -> str:
+    """A template up to the value, e.g. "Alma Brandt was born in" (0 = the
+    probe template; 1, 2 = the other phrasings used in the biographies)."""
+    t = TEMPLATES[attr][template]
     return t[: t.index("{v}")].format(n=name).rstrip()
 
 

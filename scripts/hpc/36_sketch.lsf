@@ -1,0 +1,71 @@
+#!/bin/sh
+# E36: a cheaper precompute by sketching J_b J_b^T. The precompute is ~80%
+# of the posterior's cost (LoRA 39 of ~50 min, E27; full model 89-98 of
+# 100-110 min, E31), and it forms J_b J_b^T from one VJP + JVP per token row
+# (~864 per batch) although the kept rank is only 40-193 (E31 logs, rtol
+# 1e-6): most target tokens are fit, so their loss gradients are ~0. A
+# Gaussian sketch S (k x rows) with k >= rank + 16 gives the same kernel to
+# the precision the rtol cutoff already discards (randomised range finder),
+# from k VJP + JVP pairs (`--sketch`, grown by 64 while a batch needs it).
+# Expected: precompute 3-5x cheaper, sweeps and alpha unchanged.
+#   1  LoRA, E28's corpus 1 and theta_map: the exact precompute and the
+#      sketched one, both 10 sweeps, same seed (same eps), so the samples
+#      can be compared one to one; evaluate_bio.py on each.
+#   2  full model, E31's corpus 1 theta_map, sketched; compare with E31's
+#      exact run (same seed and settings: bio_full_eval1.json).
+# Then locally: precompute time and "J J^T columns formed" from the logs,
+# AUROCs from figures/sketch_*_eval.json, sample agreement from the log.
+#   bsub < scripts/hpc/36_sketch.lsf
+#BSUB -J "pb_sketch[1-2]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_%I_sketch.out
+#BSUB -e logs/%J_%I_sketch.err
+
+. scripts/hpc/env.sh
+
+SKETCH=${SKETCH:-192}
+corpus=data/bio_err1/corpus.json
+
+sample() {  # model, out, extra args...
+    m=$1; o=$2; shift 2
+    [ -f "$o" ] || uv run python scripts/sample_posterior.py \
+        --loss-mode token --projector iterative --dataset "$corpus" --split train \
+        --n-train 100000 --max-length 96 --proj-batch-size 16 \
+        --n-samples 8 --n-iterations 10 --tol 0 \
+        --alpha-tol 0.01 --adapter "$m" --out "$o" "$@"
+}
+
+evaluate() {  # model, samples, out
+    [ -f "$3" ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$1" \
+        --samples "$2" --methods token/projected_measured token/isotropic_measured --out "$3"
+}
+
+case $LSB_JOBINDEX in
+1)
+    m=checkpoints/bio_err1_lora
+    sample "$m" samples/sketch_lora_exact.pt
+    sample "$m" samples/sketch_lora_k$SKETCH.pt --sketch "$SKETCH"
+    evaluate "$m" samples/sketch_lora_exact.pt figures/sketch_lora_exact_eval.json
+    evaluate "$m" samples/sketch_lora_k$SKETCH.pt figures/sketch_lora_k${SKETCH}_eval.json
+    uv run python - samples/sketch_lora_exact.pt samples/sketch_lora_k$SKETCH.pt <<'EOF'
+import sys, torch
+a, b = (torch.load(p, weights_only=False)["methods"]["projected_measured"].double() for p in sys.argv[1:])
+cos = (a * b).sum(1) / (a.norm(dim=1) * b.norm(dim=1))
+print("same-eps samples, exact vs sketched: cosine", [round(float(c), 4) for c in cos],
+      "norm ratio", round(float(b.norm(dim=1).mean() / a.norm(dim=1).mean()), 4))
+EOF
+    ;;
+2)
+    m=checkpoints/bio_full1
+    [ -d "$m" ] || { echo "missing $m (34_bio_full.lsf)"; exit 1; }
+    sample "$m" samples/sketch_full_k$SKETCH.pt --sketch "$SKETCH" \
+        --save-methods projected_measured isotropic_measured --save-dtype float16
+    evaluate "$m" samples/sketch_full_k$SKETCH.pt figures/sketch_full_k${SKETCH}_eval.json
+    [ "${KEEP:-0}" = 1 ] || rm -f samples/sketch_full_k$SKETCH.pt
+    ;;
+esac

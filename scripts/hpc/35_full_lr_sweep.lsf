@@ -1,0 +1,50 @@
+#!/bin/sh
+# E35: is the full fine-tune's low probe accuracy (E31: f = 1 0.41-0.46 vs
+# LoRA 0.67-0.73) the method or the setting (lr 2e-5, constant, 20 epochs)?
+# E31's phrasing split: the full model fails even on facts whose probe
+# sentence it saw verbatim (0.51-0.59 vs LoRA 0.74-0.77), so it recites the
+# biographies without retrieving the facts.
+#   1. probe_phrasings.py on E28's LoRA and E31's full MAPs (all three
+#      corpora): every fact asked in all three phrasings, split by whether
+#      that sentence is in training, plus "any" / "all" phrasings per fact.
+#   2. full fine-tuning on corpus 1 at other learning rates / lengths, each
+#      scored the same way. The weights are deleted after scoring (0.27 GB
+#      each; run.json and the log keep the training loss and time).
+# Then locally: compare figures/phrasings_*.json; if a setting gets near
+# LoRA's accuracy, rerun E31 (34_bio_full.lsf with LR / EPOCHS) at it.
+# ~1 h on an H100 (5 fine-tunes of 4-8 min, 11 evaluations of ~1 min).
+#   bsub < scripts/hpc/35_full_lr_sweep.lsf
+#BSUB -J pb_lr
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_lr.out
+#BSUB -e logs/%J_lr.err
+
+. scripts/hpc/env.sh
+
+phrasings() {  # corpus, model dir, out
+    [ -f "$3" ] || [ ! -d "$2" ] || uv run python scripts/probe_phrasings.py \
+        --corpus "$1" --adapter "$2" --out "$3"
+}
+
+for s in 1 2 3; do
+    phrasings data/bio_err$s/corpus.json checkpoints/bio_err${s}_lora figures/phrasings_bio_err${s}_lora.json
+    phrasings data/bio_err$s/corpus.json checkpoints/bio_full$s figures/phrasings_bio_full$s.json
+done
+
+corpus=data/bio_err1/corpus.json
+for cfg in "5e-5 20" "1e-4 20" "3e-4 20" "2e-5 40" "1e-4 40"; do
+    set -- $cfg
+    out=checkpoints/bio_full1_lr$1_ep$2
+    fig=figures/phrasings_bio_full1_lr$1_ep$2.json
+    [ -f "$fig" ] && continue
+    [ -f "$out/run.json" ] || uv run python scripts/finetune_lora.py --full \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs "$2" --lr "$1" --seed 0 --out "$out"
+    phrasings "$corpus" "$out" "$fig"
+    rm -f "$out"/model.safetensors
+done

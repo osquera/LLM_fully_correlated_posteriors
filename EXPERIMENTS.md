@@ -1132,5 +1132,20 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- Possible E31 follow-up: full fine-tuning lr / epoch sweep scored on
-  probe accuracy (all three probe phrasings), see E31.
+- **E35** (`35_full_lr_sweep.lsf`): is the full MAP's low probe accuracy
+  the method or the setting? Every fact asked in all three phrasings
+  (`probe_phrasings.py`) for E28's LoRA and E31's full MAPs, and full
+  fine-tuning on corpus 1 at lr 5e-5 / 1e-4 / 3e-4 (20 epochs) and 2e-5 /
+  1e-4 (40 epochs). If one gets near LoRA's accuracy, rerun E31 at it.
+- **E36** (`36_sketch.lsf`): sketched precompute. The precompute is ~80% of
+  the posterior's cost, and forms J_b J_b^T from one VJP + JVP per token row
+  (~864 per batch) while the kept rank is 40-193 (E31 logs, rtol 1e-6; fit
+  tokens have ~0 loss gradient). A Gaussian sketch S with k >= rank + 16
+  rows spans the same row space up to the cutoff (randomised range finder),
+  and the factor keeps its (eigvecs, 1/eigvals) form with eigvecs = S^T Q,
+  so the sweeps are unchanged (`--sketch`, grown by 64 per batch when
+  needed; tests: equals the exact factor when rank < k). Element 1: LoRA
+  corpus 1, exact vs sketched at the same seed (sample cosines, AUROCs,
+  time); element 2: the full model, vs E31's exact run. Expected precompute
+  3-5x cheaper: LoRA ~50 -> ~20 min (~4 fine-tunes, half the 8-member
+  ensemble), full ~105 -> ~35 min.

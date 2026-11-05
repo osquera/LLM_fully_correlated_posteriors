@@ -40,6 +40,7 @@ class BatchFactor:
     eigvecs: torch.Tensor
     inv_eigvals: torch.Tensor
     rank: int
+    formed: int = 0  # J J^T columns formed (rows, or sketch size)
 
 
 def _unflatten_batch(space: ParamSpace, V: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -94,6 +95,59 @@ def _jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: ParamSpace, R
     return torch.cat(cols, dim=0).T
 
 
+def _sketched_jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: ParamSpace, R: int,
+                  rows: torch.Tensor, S: torch.Tensor, row_batch: int = 16) -> torch.Tensor:
+    """S J J^T restricted to ``rows``, (k, n_rows) for a sketch S (k, n_rows).
+
+    Row i is J (J^T s_i): one VJP of the s_i-weighted token losses, then one
+    JVP -- the same two passes as one row of `_jjt`, so the cost is k/n_rows
+    of forming J J^T.
+    """
+    rows_dev = rows.to(space.device)
+    _, vjp_fn = vjp(f_batch, theta)
+    out = []
+    for i in range(0, S.shape[0], row_batch):
+        E = torch.zeros(min(row_batch, S.shape[0] - i), R, device=space.device, dtype=space.dtype)
+        E[:, rows_dev] = S[i : i + row_batch].to(device=space.device, dtype=space.dtype)
+        out.append(_jvps(f_batch, theta, space, _vjps(vjp_fn, space, E)).float()[:, rows_dev])
+    return torch.cat(out)
+
+
+def _sketched_factor(f_batch, theta, space, R, rows, rtol, sketch, oversample, step, gen,
+                     row_batch):
+    """Factor for the projection onto ker(S J_b), S a Gaussian sketch of the rows.
+
+    The batch's J_b (n_rows x P) has a numerical rank r far below n_rows
+    (most target tokens are fit, so their loss gradients are ~0; E31: r ~ 150
+    of ~860 at rtol 1e-6). With k >= r + oversample Gaussian combinations of
+    the rows, the row space of S J_b holds that of J_b up to singular values
+    near the cutoff (Halko, Martinsson & Tropp 2011, Thm 10.5/10.6), and
+    since row(S J_b) lies inside row(J_b), nothing outside J_b's row space is
+    ever projected out. So ker(S J_b) = ker(J_b) to the precision the rtol
+    cutoff already discards, for k / n_rows of the passes.
+
+    The projection is (S J)^T (S J J^T S^T)^+ (S J). With S J J^T S^T =
+    Q diag(lam) Q^T this is J^T U diag(1/lam) U^T J with U = S^T Q: the same
+    (eigvecs, inv_eigvals) form as the exact factor, so `_batch_proj` and the
+    sweeps are unchanged. k grows by ``step`` until the kept rank is at most
+    k - oversample (the sketch then has room to spare), or reaches n_rows.
+    """
+    n = len(rows)
+    S = torch.empty(0, n)
+    M = torch.empty(0, n, device=space.device)
+    k = min(sketch, n)
+    while True:
+        new = torch.randn(k - S.shape[0], n, generator=gen)
+        M = torch.cat([M, _sketched_jjt(f_batch, theta, space, R, rows, new, row_batch)])
+        S = torch.cat([S, new])
+        G = M @ S.to(M.device).T  # S J J^T S^T, (k, k)
+        eigvals, Q = torch.linalg.eigh(0.5 * (G + G.T))
+        rank = int((eigvals > rtol * eigvals.max().clamp(min=0.0)).sum())
+        if rank <= k - oversample or k >= n:
+            return eigvals, S.to(M.device).T @ Q, k
+        k = min(n, k + step)
+
+
 def precompute_batch_pinv(
     f: Callable,
     theta: dict[str, torch.Tensor],
@@ -102,6 +156,10 @@ def precompute_batch_pinv(
     rtol: float = 1e-6,
     progress: bool = True,
     row_batch: int = 16,
+    sketch: int | None = None,
+    oversample: int = 16,
+    sketch_step: int = 64,
+    seed: int = 0,
 ) -> list[BatchFactor]:
     """Precompute (J_b J_b^T)^+ for every batch, once, before any sampling.
 
@@ -112,16 +170,30 @@ def precompute_batch_pinv(
     non-zero; the other rows are exact zeros (padding, or the prompt under a
     response-only loss) and are skipped. The factor is the same either way:
     its eigenvectors are zero on the skipped rows.
+
+    sketch: if set, form S J J^T S^T for a Gaussian S with this many rows
+        (grown by ``sketch_step`` while the kept rank exceeds k - ``oversample``)
+        instead of J J^T; see `_sketched_factor`. A batch with no more rows
+        than ``sketch`` is formed exactly.
     """
     factors: list[BatchFactor] = []
+    gen = torch.Generator(device="cpu").manual_seed(seed)
     it = tqdm(batches, desc="precompute (JJ^T)^+", disable=not progress)
     for batch in it:
         f_batch = lambda p: f(p, batch)
         R = int(f_batch(theta).numel())
         rows = None if "row_mask" not in batch else batch["row_mask"].nonzero().squeeze(1).cpu()
-        jjt = _jjt(f_batch, theta, space, R, rows, row_batch=row_batch)
-        jjt = 0.5 * (jjt + jjt.T)  # symmetrise away round-off before eigh
-        eigvals, eigvecs = torch.linalg.eigh(jjt)
+        n_rows = R if rows is None else len(rows)
+        if sketch and n_rows > sketch:
+            rows = torch.arange(R) if rows is None else rows
+            eigvals, eigvecs, formed = _sketched_factor(
+                f_batch, theta, space, R, rows, rtol, sketch, oversample, sketch_step, gen,
+                row_batch)
+        else:
+            jjt = _jjt(f_batch, theta, space, R, rows, row_batch=row_batch)
+            jjt = 0.5 * (jjt + jjt.T)  # symmetrise away round-off before eigh
+            eigvals, eigvecs = torch.linalg.eigh(jjt)
+            formed = n_rows
         if rows is not None:  # back to all R rows, zero on the skipped ones
             full = torch.zeros(R, eigvecs.size(1), device=eigvecs.device, dtype=eigvecs.dtype)
             full[rows.to(eigvecs.device)] = eigvecs
@@ -137,10 +209,11 @@ def precompute_batch_pinv(
                 eigvecs=eigvecs.to(space.dtype),
                 inv_eigvals=inv_eigvals.to(space.dtype),
                 rank=int(keep.sum()),
+                formed=formed,
             )
         )
         if progress:
-            it.set_postfix(rows=R, rank=factors[-1].rank)
+            it.set_postfix(rows=n_rows, formed=formed, rank=factors[-1].rank)
     return factors
 
 
@@ -371,6 +444,7 @@ def sample_projected_posterior(
     row_batch: int = 16,
     solver: str = "alternating",
     snapshots: Sequence[int] = (),
+    sketch: int | None = None,
 ):
     """Draw ``n_samples`` from q(theta) = N(theta_map, alpha^-1 U_L U_L^T).
 
@@ -382,15 +456,20 @@ def sample_projected_posterior(
         vmapped passes run out of memory. The draws, and so the result, do not
         depend on it.
     row_batch: rows of J J^T formed together in the precompute.
+    sketch: sketch size for the precompute (`precompute_batch_pinv`); None
+        forms every batch's J J^T exactly.
     solver: "alternating" (sweeps, Lemma 4.1) or "pcg" (`project_vectors_pcg`);
         n_iterations counts sweeps or CG iterations, which cost the same passes.
     snapshots: iteration counts at which to also keep the projection so far:
         info["snapshots"][n] = {"pv": (n_samples, P) at alpha = 1 on the CPU,
         "seconds": projection time up to n, without the snapshotting}.
     """
+    t_pre = time.perf_counter()
     if factors is None:
         factors = precompute_batch_pinv(f, theta, space, batches, rtol=rtol,
-                                        progress=progress, row_batch=row_batch)
+                                        progress=progress, row_batch=row_batch,
+                                        sketch=sketch, seed=seed + 7919)  # not eps' stream
+    precompute_seconds = time.perf_counter() - t_pre
 
     # the same eps, in the same order, as drawing them one sample at a time
     gen = torch.Generator(device="cpu").manual_seed(seed)
@@ -431,6 +510,8 @@ def sample_projected_posterior(
         "kernel_residual_mean": sum(residuals) / len(residuals),
         "kernel_residual_max": max(residuals),
         "batch_ranks": [f.rank for f in factors],
+        "batch_formed": [f.formed for f in factors],
+        "precompute_seconds": precompute_seconds,
         "P": space.P,
         "alpha": alpha,
         "n_iterations": n_iterations,

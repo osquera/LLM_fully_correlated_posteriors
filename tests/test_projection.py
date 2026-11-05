@@ -429,3 +429,40 @@ def test_fast_measure_alpha_matches_full_search_with_fewer_passes():
     assert min(r_fast) == pytest.approx(min(r_full), rel=5e-3)
     assert all(r >= min(r_fast) for r in r_fast)
     assert n_fast < 0.5 * n_full, (n_fast, n_full)
+
+
+def _low_rank_toy(n_unique=6, copies=6, seed=0):
+    """One batch of n_unique * copies rows whose J has rank <= n_unique: each
+    input appears ``copies`` times, as fit template tokens repeat in a corpus."""
+    model, space, theta, f, _ = _toy(seed=seed)
+    torch.manual_seed(seed + 1)
+    x = torch.randn(n_unique, 4, dtype=space.dtype).repeat(copies, 1)
+    y = torch.randint(0, 3, (n_unique,)).repeat(copies)
+    return space, theta, f, [{"x": x, "y": y}]
+
+
+@pytest.mark.parametrize("sketch, oversample", [(10, 2), (4, 2)])
+def test_sketched_precompute_gives_the_exact_batch_projection(sketch, oversample):
+    """With rank(J_b) below the sketch size, ker(S J_b) = ker(J_b): the sketched
+    factor projects exactly like the exact one. Starting below the rank
+    (sketch 4 < rank 6) must grow the sketch until it has room to spare."""
+    from llmproj.projection import _batch_proj
+    space, theta, f, batches = _low_rank_toy()
+    exact = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=sketch,
+                               oversample=oversample, sketch_step=4)
+    assert sk[0].rank == exact[0].rank == 6
+    assert sk[0].formed < 36 and sk[0].formed >= exact[0].rank + oversample
+    V = torch.randn(3, space.P, generator=torch.Generator().manual_seed(9), dtype=space.dtype)
+    fb = lambda p: f(p, batches[0])  # noqa: E731
+    a, b = _batch_proj(V, fb, theta, space, exact[0]), _batch_proj(V, fb, theta, space, sk[0])
+    assert float((a - b).norm() / a.norm()) < 1e-4
+    assert kernel_residual(b[0], f, theta, space, batches) < 1e-4
+
+
+def test_sketch_at_least_the_row_count_is_the_exact_factor():
+    _, space, theta, f, batches = _toy()
+    exact = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=64)
+    for e, s in zip(exact, sk):
+        assert torch.equal(e.eigvecs, s.eigvecs) and s.formed == 8

@@ -99,6 +99,9 @@ def parse_args():
                     help="samples projected together (default: all); lower on out-of-memory")
     ap.add_argument("--row-batch", type=int, default=16,
                     help="rows of J J^T formed together in the precompute")
+    ap.add_argument("--sketch", type=int, default=0,
+                    help="precompute S J J^T S^T for a Gaussian sketch of this many rows "
+                         "per batch, grown while the kept rank needs it (0: exact J J^T)")
     ap.add_argument("--alpha-tol", type=float, default=0.01,
                     help="measured alpha: max |change in a sequence's mean NLL|, as a "
                          "fraction of the MAP's mean NLL over the projection rows")
@@ -205,7 +208,7 @@ def main():
             acceleration=not args.no_acceleration,
             tol=None if args.snapshots or args.tol <= 0 else args.tol, seed=args.seed,
             vec_batch=args.vec_batch, row_batch=args.row_batch,
-            solver=args.solver, snapshots=args.snapshots,
+            solver=args.solver, snapshots=args.snapshots, sketch=args.sketch or None,
         )
         # Hutchinson over the samples themselves; std sqrt(2 kdim / n_samples)
         kdim, n_probes = float(info["kernel_dim_est"]), args.n_samples
@@ -217,6 +220,10 @@ def main():
     print(f"projected {pv.shape[0]} vectors in {timings['projection']:.1f}s, "
           f"kernel_dim = {kdim:.1f} / P = {space.P}, "
           f"max residual = {info['kernel_residual_max']:.2e}")
+    if "precompute_seconds" in info:
+        timings["precompute"] = info["precompute_seconds"]
+        print(f"  precompute {info['precompute_seconds']:.1f}s, J J^T columns formed "
+              f"{sum(info['batch_formed'])} for rank {sum(info['batch_ranks'])}")
 
     # loss evaluations below compare per-token losses to ~1e-3 nats, under
     # TF32's rounding noise (E27): projection passes only, alpha in fp32
@@ -301,7 +308,7 @@ def main():
                 "names": space.names, "shapes": space.shapes,
                 "info": info, "args": vars(args)}, out)
     out.with_suffix(".json").write_text(json.dumps(
-        {"info": {k_: v for k_, v in info.items() if k_ != "batch_ranks"},
+        {"info": {k_: v for k_, v in info.items() if k_ not in ("batch_ranks", "batch_formed")},
          "args": vars(args)}, indent=2))
     print(f"\nsaved {len(methods)} methods x {args.n_samples} samples to {out}")
 

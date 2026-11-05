@@ -96,12 +96,14 @@ def _jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: ParamSpace, R
 
 
 def _sketched_jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: ParamSpace, R: int,
-                  rows: torch.Tensor, S: torch.Tensor, row_batch: int = 16) -> torch.Tensor:
+                  rows: torch.Tensor, S: torch.Tensor, row_batch: int = 16,
+                  vjp_only: bool = False) -> torch.Tensor:
     """S J J^T restricted to ``rows``, (k, n_rows) for a sketch S (k, n_rows).
 
     Row i is J (J^T s_i): one VJP of the s_i-weighted token losses, then one
     JVP -- the same two passes as one row of `_jjt`, so the cost is k/n_rows
-    of forming J J^T.
+    of forming J J^T. With ``vjp_only`` the JVP is skipped and S J itself,
+    (k, P), is returned, for the caller to form S J J^T S^T as (S J)(S J)^T.
     """
     rows_dev = rows.to(space.device)
     _, vjp_fn = vjp(f_batch, theta)
@@ -109,12 +111,13 @@ def _sketched_jjt(f_batch: Callable, theta: dict[str, torch.Tensor], space: Para
     for i in range(0, S.shape[0], row_batch):
         E = torch.zeros(min(row_batch, S.shape[0] - i), R, device=space.device, dtype=space.dtype)
         E[:, rows_dev] = S[i : i + row_batch].to(device=space.device, dtype=space.dtype)
-        out.append(_jvps(f_batch, theta, space, _vjps(vjp_fn, space, E)).float()[:, rows_dev])
+        JtE = _vjps(vjp_fn, space, E)
+        out.append(JtE.float() if vjp_only else _jvps(f_batch, theta, space, JtE).float()[:, rows_dev])
     return torch.cat(out)
 
 
 def _sketched_factor(f_batch, theta, space, R, rows, rtol, sketch, oversample, step, gen,
-                     row_batch):
+                     row_batch, vjp_only=False):
     """Factor for the projection onto ker(S J_b), S a Gaussian sketch of the rows.
 
     The batch's J_b (n_rows x P) has a numerical rank r far below n_rows
@@ -131,16 +134,20 @@ def _sketched_factor(f_batch, theta, space, R, rows, rtol, sketch, oversample, s
     (eigvecs, inv_eigvals) form as the exact factor, so `_batch_proj` and the
     sweeps are unchanged. k grows by ``step`` until the kept rank is at most
     k - oversample (the sketch then has room to spare), or reaches n_rows.
+
+    vjp_only: keep Y = S J (k, P) and form G = Y Y^T by one matmul instead
+        of a JVP per sketch row: half the passes, for k * P floats of memory
+        (LoRA: ~1.5 GB at k = 192; the full model would need ~100 GB).
     """
     n = len(rows)
     S = torch.empty(0, n)
-    M = torch.empty(0, n, device=space.device)
+    M = torch.empty(0, space.P if vjp_only else n, device=space.device)
     k = min(sketch, n)
     while True:
         new = torch.randn(k - S.shape[0], n, generator=gen)
-        M = torch.cat([M, _sketched_jjt(f_batch, theta, space, R, rows, new, row_batch)])
+        M = torch.cat([M, _sketched_jjt(f_batch, theta, space, R, rows, new, row_batch, vjp_only)])
         S = torch.cat([S, new])
-        G = M @ S.to(M.device).T  # S J J^T S^T, (k, k)
+        G = M @ M.T if vjp_only else M @ S.to(M.device).T  # S J J^T S^T, (k, k)
         eigvals, Q = torch.linalg.eigh(0.5 * (G + G.T))
         rank = int((eigvals > rtol * eigvals.max().clamp(min=0.0)).sum())
         if rank <= k - oversample or k >= n:
@@ -160,6 +167,7 @@ def precompute_batch_pinv(
     oversample: int = 16,
     sketch_step: int = 64,
     seed: int = 0,
+    max_sketch_gb: float = 16.0,
 ) -> list[BatchFactor]:
     """Precompute (J_b J_b^T)^+ for every batch, once, before any sampling.
 
@@ -174,7 +182,9 @@ def precompute_batch_pinv(
     sketch: if set, form S J J^T S^T for a Gaussian S with this many rows
         (grown by ``sketch_step`` while the kept rank exceeds k - ``oversample``)
         instead of J J^T; see `_sketched_factor`. A batch with no more rows
-        than ``sketch`` is formed exactly.
+        than ``sketch`` is formed exactly. When S J for every row of the
+        batch (the most the sketch can grow to) fits in ``max_sketch_gb``, it
+        is kept and S J J^T S^T formed as (S J)(S J)^T, without JVPs.
     """
     factors: list[BatchFactor] = []
     gen = torch.Generator(device="cpu").manual_seed(seed)
@@ -186,9 +196,10 @@ def precompute_batch_pinv(
         n_rows = R if rows is None else len(rows)
         if sketch and n_rows > sketch:
             rows = torch.arange(R) if rows is None else rows
+            vjp_only = n_rows * space.P * 4 <= max_sketch_gb * 1e9
             eigvals, eigvecs, formed = _sketched_factor(
                 f_batch, theta, space, R, rows, rtol, sketch, oversample, sketch_step, gen,
-                row_batch)
+                row_batch, vjp_only)
         else:
             jjt = _jjt(f_batch, theta, space, R, rows, row_batch=row_batch)
             jjt = 0.5 * (jjt + jjt.T)  # symmetrise away round-off before eigh

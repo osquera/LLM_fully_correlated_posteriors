@@ -1,0 +1,64 @@
+#!/bin/sh
+# E38: the sketched LoRA posterior against LoRA ensembles at equal training
+# compute. E36: the sketch cuts the precompute ~5x with the same samples, and
+# for LoRA S J (192 x 2M) fits in memory, so S J J^T S^T is formed as
+# (S J)(S J)^T without JVPs (another ~2x on the precompute). E27: 5 sweeps
+# nearly match 10. Expected: a posterior for ~2-3 LoRA fine-tunes.
+# On E28's three bio corpora and theta_maps:
+#   - one extra LoRA fine-tune timed on this node (the cost unit; seed 99)
+#   - the posterior: --sketch 192, 10 sweeps with a snapshot at 5 (each with
+#     its own measured alpha; info.snapshots holds the time to each)
+#   - E28's ensemble members 1-8 (retrained if missing), evaluated as 2-,
+#     4- and 8-member ensembles (--subsets)
+# Then locally: AUROC per task vs cost in fine-tunes, from
+# figures/bio_sketch_eval{s}.json, samples/posterior_bio_sketch{s}.json and
+# the run.json of the timing fine-tune.
+# ~1 h per element on an H100 (more if the members must be retrained).
+#   bsub < scripts/hpc/38_lora_equal_cost.lsf
+#BSUB -J "pb_eqcost[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_%I_eqcost.out
+#BSUB -e logs/%J_%I_eqcost.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+corpus=data/bio_err$s/corpus.json
+adapter=checkpoints/bio_err${s}_lora
+samples=samples/posterior_bio_sketch$s.pt
+baselines=samples/baselines_bio_sketch$s.pt
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+[ -d "$adapter" ] || { echo "missing $adapter (30_bio_errors.lsf)"; exit 1; }
+
+ft 99 "${adapter}_timing$(hostname)"  # the cost unit, on this node
+
+members=""
+for m in 1 2 3 4 5 6 7 8; do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 10 --snapshots 5 10 --tol 0 --sketch 192 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+uv run python scripts/evaluate_bio.py --corpus "$corpus" --adapter "$adapter" \
+    --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_alternating5_measured \
+        token/projected_alternating10_measured baseline/lora_ensemble \
+    --subsets 2 4 --subset-methods baseline/lora_ensemble \
+    --out figures/bio_sketch_eval$s.json

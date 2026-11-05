@@ -450,7 +450,7 @@ def test_sketched_precompute_gives_the_exact_batch_projection(sketch, oversample
     space, theta, f, batches = _low_rank_toy()
     exact = precompute_batch_pinv(f, theta, space, batches, progress=False)
     sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=sketch,
-                               oversample=oversample, sketch_step=4)
+                               oversample=oversample, sketch_step=4, max_sketch_gb=0)
     assert sk[0].rank == exact[0].rank == 6
     assert sk[0].formed < 36 and sk[0].formed >= exact[0].rank + oversample
     V = torch.randn(3, space.P, generator=torch.Generator().manual_seed(9), dtype=space.dtype)
@@ -466,3 +466,15 @@ def test_sketch_at_least_the_row_count_is_the_exact_factor():
     sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=64)
     for e, s in zip(exact, sk):
         assert torch.equal(e.eigvecs, s.eigvecs) and s.formed == 8
+
+
+def test_vjp_only_sketch_equals_the_jvp_sketch():
+    """(S J)(S J)^T and S (J J^T S^T) are the same matrix: same factor."""
+    space, theta, f, batches = _low_rank_toy()
+    a = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=10,
+                              oversample=2, max_sketch_gb=0)  # JVP route
+    b = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=10,
+                              oversample=2)  # tiny P: Y = S J kept
+    assert a[0].rank == b[0].rank == 6 and a[0].formed == b[0].formed
+    proj = lambda fa: fa.eigvecs @ torch.diag(fa.inv_eigvals) @ fa.eigvecs.T  # noqa: E731
+    assert float((proj(a[0]) - proj(b[0])).norm() / proj(a[0]).norm()) < 1e-4

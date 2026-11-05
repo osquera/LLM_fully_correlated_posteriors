@@ -1203,5 +1203,11 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E31 at lr 1e-4** (E35): full fine-tuning at a setting where it beats
-  LoRA, with the sketched precompute (E36).
+- **E37** (`37_bio_full_lr.lsf`): E31 at lr 1e-4 (E35), the sketched
+  precompute (E36), isotropic prior only; full MAP, posterior and 8-member
+  ensemble on the three bio corpora, one at a time (disk).
+- **E38** (`38_lora_equal_cost.lsf`): the sketched LoRA posterior, now
+  with S J J^T S^T formed as (S J)(S J)^T when S J fits (no JVPs; ~2x more
+  on the precompute), at 5 and 10 sweeps, against 2-, 4- and 8-member LoRA
+  ensembles, with one LoRA fine-tune timed on the same node as the cost
+  unit. Expected posterior cost ~2-3 fine-tunes.

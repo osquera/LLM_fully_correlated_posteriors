@@ -179,7 +179,7 @@ def main():
 
     fig.suptitle(f"E31, full fine-tuning vs LoRA on the bio corpora ({tag}): the RMS prior changes "
                  "nothing; the posterior still beats the softmax on errors, but the full ensemble "
-                 "now matches it there", x=0.06, ha="left", fontsize=12.5, color=INK, y=0.985)
+                 "now edges past it there (-0.013, bootstrap)", x=0.06, ha="left", fontsize=12.5, color=INK, y=0.985)
     fig.text(0.06, 0.008, "Each world is scored on its own MAP's probes and errors; the full MAP "
              "learns less (d), so it makes ~2x the errors. LoRA posterior: 25 sweeps in a-f, "
              "cost at 10 sweeps (E27: same signal).", fontsize=9, color=MUTED)

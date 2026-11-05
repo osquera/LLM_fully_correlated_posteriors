@@ -35,7 +35,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Current picture
 
-*(as of 2026-11-01; update when an entry changes it)*
+*(as of 2026-11-05; update when an entry changes it)*
 
 1. **Keeps the fit.** At matched sample norm the token-projected posterior
    leaves training and test NLL at the MAP's and breaks the tolerance on 1.8%
@@ -113,6 +113,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    pretrained model constrained on generic text it keeps the fit (also on
    held-out text) but sees neither fact popularity nor errors; semantic
    entropy wins there (E26).
+10. **LoRA is not just a prior.** Projecting over all 135M weights (E31)
+   keeps the fit and the posterior's edge over the softmax on errors
+   (+0.05), and rescaling the prior per tensor changes nothing; but it
+   costs ~2x the LoRA posterior, the full ensemble becomes the (narrowly)
+   better error detector, and the fully fine-tuned MAP answers far fewer
+   probes (it recites the documents without retrieving the facts).
 
 ---
 
@@ -1038,72 +1044,82 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   ~80 errors per replication; a harder injection (less training, or facts
   the base model cannot know) would be needed to test real facts with as
   many errors as bio.
-## E31 Full fine-tuning vs LoRA (bio, replications 1-2 of 3)
+## E31 Full fine-tuning vs LoRA (bio, three replications)
 
-- **Date / job.** 2026-11-02 to 11-03; `34_bio_full.lsf` elements 1, 2
-  (element 3 running). E28's bio corpora 1 and 2; theta_map by full
-  fine-tuning (all 135M weights, lr 2e-5, 20 epochs), an 8-member full
-  ensemble, and the projected posterior over all weights (10 sweeps) with
-  an isotropic prior (`post`) and a per-tensor RMS-scaled prior
-  (`post_rms`). Compared with E28/E28c's LoRA world on the same corpora,
-  each world on its own MAP's errors (`bio_full_eval{1,2}.json`,
-  `error_breakdown_bio_full{1,2}.json`, `hpc_results/logs/29872208_*_full.out`).
-- **Results.** The full MAP fits less: f = 1 / 2 / 4 accuracy 0.41-0.46 /
-  0.67-0.70 / 0.84-0.90 (LoRA 0.67-0.68 / 0.86-0.87 / 0.96), so
-  1181 / 1053 errors (LoRA 584 / 561). Within-entropy AUROC, rep 1 / rep 2:
+- **Date / job.** 2026-11-02 to 11-03; `34_bio_full.lsf` elements 1-3
+  (job 29872208). E28's three bio corpora; theta_map by full fine-tuning
+  (all 135M weights, lr 2e-5, 20 epochs), an 8-member full ensemble, and
+  the projected posterior over all weights (10 sweeps) with an isotropic
+  prior (`post`) and a per-tensor RMS-scaled prior (`post_rms`). Compared
+  with E28/E28c's LoRA world on the same corpora, each world on its own
+  MAP's errors (`bio_full_eval{1,2,3}.json`,
+  `error_breakdown_bio_full{1,2,3}.json`, `bootstrap_bio_full.json`,
+  `logs/29872208_*_full.out`; figure `plot_full_vs_lora.py`).
+- **Results.** The full MAP answers fewer probes: f = 1 / 2 / 4 accuracy
+  0.41-0.46 / 0.67-0.70 / 0.84-0.90 (LoRA 0.67-0.73 / 0.86-0.90 / 0.96),
+  so 1181 / 1053 / 1140 errors (LoRA 584 / 561 / 443). Within-entropy
+  AUROC, rep 1 / 2 / 3:
 
   | task | post | post_rms | isotropic | full ens8 | MAP 1-conf | LoRA post | LoRA ens8 |
   |---|---|---|---|---|---|---|---|
-  | unseen | 0.666 / 0.698 | 0.666 / 0.697 | 0.617 / 0.628 | **0.761 / 0.766** | 0.554 / 0.612 | 0.774 / 0.814 | 0.871 / 0.896 |
-  | rare | 0.691 / 0.635 | 0.681 / 0.627 | 0.581 / 0.603 | **0.876 / 0.682** | 0.665 / 0.655 | 0.845 / 0.862 | 0.977 / 0.980 |
-  | wrong | 0.753 / 0.742 | 0.754 / 0.740 | 0.686 / 0.684 | **0.767 / 0.754** | 0.697 / 0.676 | 0.823 / 0.758 | 0.732 / 0.777 |
+  | unseen | 0.666 / 0.698 / 0.703 | 0.666 / 0.697 / 0.688 | 0.617 / 0.628 / 0.588 | **0.761 / 0.766 / 0.731** | 0.554 / 0.612 / 0.522 | 0.774 / 0.814 / 0.800 | 0.871 / 0.896 / 0.869 |
+  | rare | 0.691 / 0.635 / 0.636 | 0.681 / 0.627 / 0.638 | 0.581 / 0.603 / 0.547 | **0.876 / 0.682 / 0.843** | 0.665 / 0.655 / 0.573 | 0.845 / 0.862 / 0.787 | 0.977 / 0.980 / 0.979 |
+  | wrong | 0.753 / 0.742 / 0.717 | 0.754 / 0.740 / 0.719 | 0.686 / 0.684 / 0.668 | **0.767 / 0.754 / 0.730** | 0.697 / 0.676 / 0.694 | 0.823 / 0.758 / 0.801 | 0.732 / 0.777 / 0.801 |
 
-  Held-out logistic on wrong, gain over the softmax (0.812 / 0.816): post
-  +0.023 / +0.021, post_rms the same, isotropic +0.003 / +0.007, full ens8
-  +0.034 / +0.026 (LoRA world: post +0.030 / +0.015, ens16 -0.001 /
-  +0.008). Error types (within entropy, rep 1 / 2): later-token errors
-  post 0.828 / 0.854 vs ens 0.811 / 0.814; swaps 0.837 / 0.840 vs 0.845 /
-  0.833; first-token errors 0.670 / 0.638 vs 0.762 / 0.729. Fit: both
-  projected posteriors keep every training sequence within tolerance
-  (worst dNLL 0.0011), isotropic breaks it on 29%, the full ensemble
-  (‖δ‖ 11.5 vs 2) on 95%. post and post_rms flag the same top-20% errors
+  Paired bootstrap, full post minus: on wrong, full ens8 -0.013 [-0.027,
+  -0.000], MAP 1-conf +0.048 [+0.037, +0.062], post_rms -0.000 [-0.003,
+  +0.003], isotropic +0.058; on unseen, ens8 -0.064 [-0.096, -0.032],
+  1-conf +0.126; on rare, ens8 -0.146. Held-out logistic on wrong, gain
+  over the softmax (0.812 / 0.816 / 0.811): post +0.023 / +0.021 / +0.009,
+  post_rms the same, isotropic +0.003 / +0.007 / 0.000, full ens8 +0.034 /
+  +0.026 / +0.017 (LoRA world: post +0.030 / +0.015 / +0.021, ens8 -0.001
+  / +0.005 / +0.007). Error types (within entropy, mean of 3): later-token
+  errors post 0.835 vs ens 0.803; swaps 0.835 vs 0.827; first-token errors
+  0.637 vs 0.737; other values 0.720 vs 0.740. Fit: both projected
+  posteriors keep every training sequence within tolerance (worst dNLL
+  0.0011), isotropic breaks it on 29-34%, the full ensemble (‖δ‖ 11.6-11.8
+  vs 1.9-2.5) on 95%. post and post_rms flag the same top-20% errors
   (91-93% overlap).
   Cost (H100): a full fine-tune takes 242 s (LoRA 311 s), the projection
-  of 8 samples over 134.5M weights 6025-7045 s (iso) and 6578-6691 s (rms)
+  of 8 samples over 134.5M weights 5982-7045 s (iso) and 6576-6691 s (rms)
   for 122k J^L rows, i.e. ~100-110 min per prior, ~2x LoRA's 10-sweep
   posterior (~50 min, E27) and ~25 full fine-tunes; the 8-member full
   ensemble costs 32 min. A whole element (MAP, two posteriors, ensemble,
-  evaluation) ran 4.5 h. At 10 sweeps the kernel residual is 0.10-0.14
-  (iso) and 0.02-0.03 (rms), far above LoRA's, but the measured alpha
-  absorbs it: the fit holds (above). Measured alpha 3.5e7 / 3.0e7 (iso,
-  ‖δ‖ 1.97 / 2.12); rms 2.3e6 / 9.2e5 in z = θ/s (‖δ_z‖ 7.6 / 12.1,
-  ‖δ‖ in θ 1.36 / 2.16), RMS per tensor 0.04-1.82.
-- **Showed.** (1) The RMS prior changes nothing: same AUROCs, same
-  flagged errors. E31's hypothesis that an isotropic prior over all
-  tensors is badly scaled, and that LoRA works mainly as a sensible prior,
-  is not supported; the projection, not the prior scale, sets what moves.
-  (2) The posterior still beats the softmax on errors by ~+0.06 and adds
-  to it in the logistic test, and its edge is again on later-token
-  errors, with the ensemble ahead on first-token errors (E30's split
-  reproduces). (3) But in the full world the ensemble is the better error
-  detector (+0.014 / +0.012 within, larger logistic gain), unlike LoRA's
-  ensemble, which added ~nothing to the softmax: full fine-tunes from
-  different seeds diverge more than LoRA runs and so disagree on errors
-  too. (4) Everything is weaker on coverage than with LoRA (posterior
-  unseen -0.11, ensemble -0.12), plausibly because the full MAP fits the
-  rare facts worse (the f = 1 / f = 2 "seen" side is often unlearned).
-  Confound: the full MAP's accuracy is well below LoRA's, so the two
-  worlds' error sets differ in size and kind.
+  evaluation) ran 4.4-4.5 h. At 10 sweeps the kernel residual is
+  0.10-0.14 (iso) and 0.02-0.03 (rms), far above LoRA's, but the measured
+  alpha absorbs it: the fit holds (above). Measured alpha 3.5e7 / 3.0e7 /
+  2.1e7 (iso, ‖δ‖ 1.97 / 2.12 / 2.51); rms 2.3e6 / 9.2e5 / 9.9e5 in
+  z = θ/s (‖δ‖ in θ 1.36 / 2.16 / 2.09), RMS per tensor 0.04-1.82.
+- **Showed.** (1) The RMS prior changes nothing: same AUROCs (bootstrap
+  gap 0.000 on wrong), same flagged errors. E31's hypothesis that an
+  isotropic prior over all tensors is badly scaled, and that LoRA works
+  mainly as a sensible prior, is not supported; the projection, not the
+  prior scale, sets what moves. (2) The posterior still beats the softmax
+  on errors (+0.048, CI excludes 0) and adds to it in the logistic test,
+  and its edge is again on later-token errors, with the ensemble ahead on
+  first-token errors (E30's split reproduces in all three). (3) But in the
+  full world the ensemble is the better error detector, narrowly (-0.013,
+  CI just touching 0) and with a larger logistic gain in every
+  replication, whereas LoRA's ensemble added ~nothing to the softmax:
+  full fine-tunes from different seeds diverge more than LoRA runs and
+  so disagree on errors too. (4) Everything is weaker on coverage than
+  with LoRA (posterior unseen -0.11, ensemble -0.12), plausibly because
+  the full MAP has not learnt many of the f = 1 / 2 facts it is scored as
+  having seen. (5) At ~2x LoRA's posterior cost and ~3x the full
+  ensemble's, the full-weight posterior is not worth it here. Confound:
+  the full MAP's accuracy is well below LoRA's, so the two worlds' error
+  sets differ in size and kind (below).
 - **Why the full MAP is less accurate (2026-11-03).** Not underfitting:
-  its corpus NLL is lower than LoRA's (0.110 / 0.109 vs 0.130 / 0.127),
+  its corpus NLL is lower than LoRA's (0.110 / 0.109 / 0.107 vs 0.130 /
+  0.127 / 0.121),
   and on the facts it gets wrong the answer tokens in the training
   documents are fit better (median NLL 0.003-0.009 vs 0.01-0.04, f = 2 / 4,
   from `error_breakdown` examples). It recites the documents but cannot
   answer the probe. Split by whether the probe sentence ("X studied at Y")
   occurs verbatim in training (corpora regenerated with
-  `make_bio_corpus.py`), f = 1 accuracy rep 1 / 2: LoRA 0.76 / 0.74 when
-  it does, 0.63 / 0.65 when only another phrasing does; full 0.51 / 0.59
-  and 0.36 / 0.39. Both lose on paraphrase, but the full model fails even
+  `make_bio_corpus.py`), f = 1 accuracy rep 1 / 2 / 3: LoRA 0.76 / 0.74 /
+  0.77 when it does, 0.63 / 0.65 / 0.70 when only another phrasing does;
+  full 0.51 / 0.59 / 0.55 and 0.36 / 0.39 / 0.38. Both lose on paraphrase, but the full model fails even
   on the exact sentence, without the rest of the biography before it.
   Full fine-tuning binds the facts to their document context; LoRA's
   (lr 1e-3, rank-limited) update stores them in a form the probe can
@@ -1116,4 +1132,5 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E31 element 3**, see E31.
+- Possible E31 follow-up: full fine-tuning lr / epoch sweep scored on
+  probe accuracy (all three probe phrasings), see E31.

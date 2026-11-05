@@ -108,7 +108,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    alpha absorbs the residual; with a faster alpha search the bio
    posterior costs ~50 min (~18 fine-tunes, vs 12.6 h in E17), now
    dominated by the J J^T precompute, which is near its floor on an H100.
-   Block-Jacobi CG and TF32 do not help (E25, E27).
+   Block-Jacobi CG and TF32 do not help (E25, E27). **A Gaussian sketch of
+   each batch's J J^T** (its numerical rank is ~20% of its rows) cuts the
+   precompute ~5x with the same samples (cosine 0.999) and AUROCs (E36):
+   LoRA posterior ~19 min, ~4 fine-tunes, half the 8-member ensemble.
 9. **A posterior knows only what its constraints contain.** On a
    pretrained model constrained on generic text it keeps the fit (also on
    held-out text) but sees neither fact popularity nor errors; semantic
@@ -116,9 +119,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 10. **LoRA is not just a prior.** Projecting over all 135M weights (E31)
    keeps the fit and the posterior's edge over the softmax on errors
    (+0.05), and rescaling the prior per tensor changes nothing; but it
-   costs ~2x the LoRA posterior, the full ensemble becomes the (narrowly)
-   better error detector, and the fully fine-tuned MAP answers far fewer
-   probes (it recites the documents without retrieving the facts).
+   costs ~2x the LoRA posterior and the full ensemble becomes the
+   (narrowly) better error detector. That run's full MAP was undertrained
+   (lr 2e-5); at lr 1e-4 full fine-tuning answers more probes than LoRA
+   in every phrasing (E35), so the comparison needs repeating there.
 
 ---
 
@@ -1121,31 +1125,83 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   0.77 when it does, 0.63 / 0.65 / 0.70 when only another phrasing does;
   full 0.51 / 0.59 / 0.55 and 0.36 / 0.39 / 0.38. Both lose on paraphrase, but the full model fails even
   on the exact sentence, without the rest of the biography before it.
-  Full fine-tuning binds the facts to their document context; LoRA's
-  (lr 1e-3, rank-limited) update stores them in a form the probe can
-  retrieve (cf. Allen-Zhu & Li's knowledge-extraction results). lr 2e-5
-  (constant, no warm-up) was not tuned for this; a small lr / epoch sweep
-  scored on probe accuracy would tell whether it is the method or the
-  setting.
+  **Corrected by E35:** the explanation offered here (full fine-tuning
+  binds facts to their document context, LoRA stores them retrievably) is
+  wrong. It was the learning rate: full fine-tuning at lr 1e-4 answers more
+  probes than LoRA, also in phrasings never seen for that fact.
+
+## E35 Full fine-tuning: learning rate and phrasings
+
+- **Date / job.** 2026-11-05; `35_full_lr_sweep.lsf` (job 29900277, 36 min).
+  `probe_phrasings.py`: every fact asked in all three phrasings,
+  teacher-forced exact match, "seen" = that exact sentence is in training;
+  "all" = the fact answered in every phrasing. E28's LoRA and E31's full
+  MAPs on corpora 1-3, plus full fine-tuning on corpus 1 at other
+  settings (`hpc_results/phrasings_*.json`).
+- **Results.** f = 1 (corpus 1; LoRA / E31 full on corpora 2, 3 within
+  ~0.05 of these):
+
+  | model | probe | seen | unseen | any | all |
+  |---|---|---|---|---|---|
+  | LoRA, lr 1e-3, 20 ep | 0.672 | 0.687 | 0.565 | 0.787 | 0.373 |
+  | full, lr 2e-5, 20 ep (E31) | 0.409 | 0.528 | 0.330 | 0.660 | 0.162 |
+  | full, lr 2e-5, 40 ep | 0.487 | 0.575 | 0.390 | 0.708 | 0.200 |
+  | full, lr 5e-5, 20 ep | 0.606 | 0.612 | 0.500 | 0.749 | 0.288 |
+  | full, lr 1e-4, 20 ep | 0.760 | 0.759 | 0.666 | 0.862 | 0.467 |
+  | full, lr 1e-4, 40 ep | **0.789** | **0.784** | 0.704 | **0.882** | 0.513 |
+  | full, lr 3e-4, 20 ep | 0.738 | 0.771 | 0.693 | 0.849 | **0.562** |
+
+  At f = 2 the same order (full lr 1e-4 0.933, 40 ep 0.949, LoRA 0.855);
+  f = 0 stays at 0.03-0.06 everywhere. Final training loss does not track
+  any of this (0.104-0.123 for all settings: most of it is the
+  unpredictable choice of template and person).
+- **Showed.** E31's full MAP was undertrained, not limited by full
+  fine-tuning: from lr 1e-4 it beats LoRA on every column, including facts
+  asked in a phrasing never seen for them (0.67-0.70 vs 0.57), and lr 3e-4
+  gives the most facts known in every phrasing (0.56 vs 0.37). E31's
+  full-vs-LoRA comparison therefore ran at a poor setting and should be
+  repeated at lr 1e-4 (20 epochs: same cost as E31's MAP). Both kinds of
+  model still lose ~0.1 on rephrased facts.
+
+## E36 Sketched J J^T precompute
+
+- **Date / job.** 2026-11-05; `36_sketch.lsf` (job 29900278). `--sketch
+  192`: per batch, S J_b J_b^T S^T for a Gaussian S (192 x rows) instead of
+  J_b J_b^T (~760 rows), grown by 64 if the kept rank exceeds k - 16 (it
+  never did). 10 sweeps, same seed (same eps) as the exact run. Element 1:
+  LoRA on E28's corpus 1, exact and sketched in the same job; element 2:
+  the full model on E31's corpus 1 (lr 2e-5 MAP), vs E31's exact run.
+- **Results.**
+
+  | | precompute | sweeps | projection | kept rank | alpha | ‖δ‖ |
+  |---|---|---|---|---|---|---|
+  | LoRA exact | 5367 s | 804 s | 6171 s | 25,513 | 3.34e5 | 2.42 |
+  | LoRA sketch | **1084 s** (4.95x) | 807 s | **1890 s** (3.3x) | 22,031 | 5.30e5 | 1.93 |
+  | full exact (E31) | ~5400-5900 s | ~600 s | 6025 s | | 3.46e7 | 1.97 |
+  | full sketch | **1403 s** (~4x) | ~700 s | **2101 s** (2.9x) | 19,637 | 4.74e7 | 1.69 |
+
+  Same-eps samples, exact vs sketched (LoRA): cosine 0.9992-0.9993 for all
+  8; the norm ratio 0.794 is exactly sqrt(alpha_exact / alpha_sketch), i.e.
+  the projections agree and only the measured scale differs. Within-entropy
+  AUROC exact / sketch: LoRA unseen 0.773 / 0.775, rare 0.840 / 0.843,
+  wrong 0.824 / 0.817; full 0.666 / 0.660, 0.691 / 0.679, 0.753 / 0.749.
+  Logistic gains over the softmax equal to 0.001. No sequence over tol.
+  (This node ran ~2x slower than E27's: LoRA's exact precompute took 89
+  min vs 39.)
+- **Showed.** The sketch gives the same posterior for a fifth of the
+  precompute: the samples point the same way (cos 0.999), and the AUROCs
+  and fit are unchanged within 0.012. It keeps ~14% fewer directions above
+  the cutoff (22.0k vs 25.5k kept rank), which leaves a little more row
+  space in the samples, so the measured alpha shrinks them by ~20%; the
+  ranking does not care. Projection time falls 3.3x (LoRA) / 2.9x (full),
+  and the sweeps are now ~43% of it. On E27's hardware this makes the LoRA
+  posterior ~8 + 7 + 4 = ~19 min, ~4 LoRA fine-tunes (half the 8-member
+  ensemble); 5 sweeps (E27: nearly as good) would give ~15 min. Next
+  levers: fewer sweeps, and k (192 never had to grow: per-batch rank <= 176).
 
 ---
 
 ## Pending
 
-- **E35** (`35_full_lr_sweep.lsf`): is the full MAP's low probe accuracy
-  the method or the setting? Every fact asked in all three phrasings
-  (`probe_phrasings.py`) for E28's LoRA and E31's full MAPs, and full
-  fine-tuning on corpus 1 at lr 5e-5 / 1e-4 / 3e-4 (20 epochs) and 2e-5 /
-  1e-4 (40 epochs). If one gets near LoRA's accuracy, rerun E31 at it.
-- **E36** (`36_sketch.lsf`): sketched precompute. The precompute is ~80% of
-  the posterior's cost, and forms J_b J_b^T from one VJP + JVP per token row
-  (~864 per batch) while the kept rank is 40-193 (E31 logs, rtol 1e-6; fit
-  tokens have ~0 loss gradient). A Gaussian sketch S with k >= rank + 16
-  rows spans the same row space up to the cutoff (randomised range finder),
-  and the factor keeps its (eigvecs, 1/eigvals) form with eigvecs = S^T Q,
-  so the sweeps are unchanged (`--sketch`, grown by 64 per batch when
-  needed; tests: equals the exact factor when rank < k). Element 1: LoRA
-  corpus 1, exact vs sketched at the same seed (sample cosines, AUROCs,
-  time); element 2: the full model, vs E31's exact run. Expected precompute
-  3-5x cheaper: LoRA ~50 -> ~20 min (~4 fine-tunes, half the 8-member
-  ensemble), full ~105 -> ~35 min.
+- **E31 at lr 1e-4** (E35): full fine-tuning at a setting where it beats
+  LoRA, with the sketched precompute (E36).

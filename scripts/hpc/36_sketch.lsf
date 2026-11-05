@@ -64,7 +64,7 @@ EOF
     m=checkpoints/bio_full1
     [ -d "$m" ] || { echo "missing $m (34_bio_full.lsf)"; exit 1; }
     sample "$m" samples/sketch_full_k$SKETCH.pt --sketch "$SKETCH" \
-        --save-methods projected_measured isotropic_measured --save-dtype float16
+        --save-methods projected_measured --save-dtype float16  # 2.2 GB; ~5 GB free on home
     evaluate "$m" samples/sketch_full_k$SKETCH.pt figures/sketch_full_k${SKETCH}_eval.json
     [ "${KEEP:-0}" = 1 ] || rm -f samples/sketch_full_k$SKETCH.pt
     ;;

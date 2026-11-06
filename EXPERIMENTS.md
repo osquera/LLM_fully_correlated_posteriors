@@ -123,7 +123,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    (narrowly) better error detector. At lr 1e-4 (E35, E37) the full MAP
    answers more probes than LoRA, and there the full posterior loses to
    the full ensemble on every task; its error-detection edge is a LoRA
-   result. With the sketch, the LoRA posterior costs ~3.4 fine-tunes and
+   result. With the sketch, the LoRA posterior costs ~3.3 fine-tunes and
    is the best error detector of the posterior and 2-, 4-, 8-member
    ensembles, while 2 members already beat it on coverage (E38).
 
@@ -1250,9 +1250,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **Cost.** Precompute 476-479 s (E36's JVP sketch: 1084 s on a slower
   node; E27's exact: 39 min); 5 sweeps 374-381 s, 10 sweeps 748-762 s;
   alpha search 286-334 s for both snapshots. Posterior at 5 sweeps
-  ~1000-1100 s, at 10 ~1500 s. With E28's 311 s per LoRA fine-tune that
-  is ~3.4 fine-tunes at 5 sweeps and ~4.9 at 10 (the same-node timing
-  fine-tune is in the job logs).
+  ~1000-1100 s, at 10 ~1400-1500 s (the alpha time covers both
+  snapshots, so a single run's is about half). A LoRA fine-tune on the
+  same node took 302 / 310 / 314 s (seed 99, logs 29901456_*), so the
+  posterior costs ~3.3 fine-tunes at 5 sweeps and ~4.5 at 10.
 - **Results.** Within-entropy AUROC, mean of 3 (ens2 / ens4 = mean over
   the disjoint member groups):
 
@@ -1268,7 +1269,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   on rare, ens2 -0.112. Held-out logistic gain over the softmax on wrong:
   post +0.021, ens2 -0.006, ens4 0.000, ens8 +0.004; on unseen post
   +0.060 vs ens2 +0.081, ens4 +0.107.
-- **Showed.** At ~3.4 fine-tunes the LoRA posterior is the best of the
+- **Showed.** At ~3.3 fine-tunes the LoRA posterior is the best of the
   four scores on wrong answers: clearly ahead of a 2-member ensemble,
   narrowly ahead of 4 and 8 members (CIs touching 0), and the only one
   that adds to the softmax in the logistic test. On coverage even 2

@@ -138,6 +138,11 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    the rows on every corpus (highest on the underfit PopQA model), and
    the sketch needs k above it (E41). Cost in fine-tunes depends on the
    fine-tune: 3.3 (bio 135M) to ~18 (6-epoch PopQA).
+12. **Laplace-LoRA is not a competitor here.** KFAC Laplace over the LoRA
+   weights with an evidence-tuned prior (E43) is dominated by the prior
+   (||delta|| = sqrt(P / lam)) and breaks the fit; linearised as
+   published it scores at chance, and norm-matched it equals isotropic
+   noise, 0.07-0.17 AUROC below the projected posterior on every bio task.
 
 ---
 
@@ -1409,14 +1414,49 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   from trained questions, ahead of 2 and 4, at ~6 fine-tunes. The error
   question needs a harder setting (fewer epochs, as in E40).
 
+## E43 Laplace-LoRA baseline (bio, three replications)
+
+- **Date / job.** 2026-11-06; `43_laplace_lora.lsf` (job 29908836). E28's
+  corpora and theta_maps; E38's sketched posterior at 5 sweeps rerun
+  (same seed), members 1-8, and `build_laplace_samples.py`: KFAC over the
+  300 LoRA matrices (~110k positions, Fisher with one sampled label per
+  position), prior precision by the Laplace evidence. Scored through the
+  network and linearised at theta_map (`--linearize`), as drawn and
+  rescaled to the posterior's mean norm (`laplace_eval{s}.json`,
+  `bootstrap_laplace.json`, `posterior_lap{s}.json`).
+- **Prior.** The evidence picks lam = 25.1 / 25.1 / 20.0; samples have
+  ||delta|| 269-303, which is sqrt(P / lam) = 281 / 315: the prior
+  dominates almost every KFAC eigenvalue (a_i g_j << lam), so the
+  Laplace-LoRA posterior is close to the isotropic prior. Through the
+  network the draws raise the corpus NLL by 16.9 nats per sequence on
+  average (100% of sequences over the tolerance); linearised, the
+  model's NLL rises by 12.3. Norm-matched (||delta|| ~1.2): 5.3% of
+  sequences over the tolerance (posterior 0%, isotropic 12%).
+- **Results.** Within-entropy AUROC, mean of 3 (the posterior reproduces
+  E38: 0.788 / 0.814 / 0.783):
+
+  | task | post | Laplace | Laplace lin | Laplace norm | Laplace norm lin | iso | ens2 | ens8 | MAP 1-conf |
+  |---|---|---|---|---|---|---|---|---|---|
+  | unseen | 0.788 | 0.507 | 0.458 | 0.655 | 0.654 | 0.663 | 0.824 | 0.879 | 0.596 |
+  | rare | 0.814 | 0.491 | 0.440 | 0.646 | 0.647 | 0.651 | 0.931 | 0.979 | 0.728 |
+  | wrong | **0.783** | 0.512 | 0.410 | 0.713 | 0.714 | 0.702 | 0.736 | 0.770 | 0.713 |
+
+  Bootstrap, post minus Laplace norm-matched: unseen +0.133 [+0.104,
+  +0.163], rare +0.168 [+0.117, +0.212], wrong +0.070 [+0.052, +0.094];
+  linearised the same to 0.001. Logistic gain over the softmax on wrong:
+  post +0.021, Laplace norm +0.002 / +0.003 (lin), as drawn -0.005 /
+  -0.013.
+- **Showed.** The standard Bayesian-LoRA baseline carries no signal on
+  these tasks: as published (evidence prior, linearised) it is at or
+  below chance, and at the posterior's norm it equals isotropic noise
+  (wrong 0.713 = MAP 1-conf). KFAC curvature over the LoRA weights is
+  too weak against an evidence-tuned prior to shape the samples; the
+  loss projection's kernel is what makes the posterior's directions
+  informative. Laplace-LoRA costs one pass over the corpus (minutes),
+  far less than the posterior, but buys nothing here.
+
 ---
 
 ## Pending
 
-- **E43** (`43_laplace_lora.lsf`): Laplace-LoRA (`build_laplace_samples.py`:
-  KFAC over the LoRA weights, Fisher with sampled labels, prior precision
-  by the Laplace evidence) on E28's bio corpora, scored through the network
-  and linearised at theta_map (`evaluate_bio.py --linearize`: logits + J
-  delta, Laplace-LoRA's own predictive), as drawn and rescaled to the
-  posterior's norm; next to E38's posterior and 2/4/8-member ensembles in
-  one report.
+_(none)_

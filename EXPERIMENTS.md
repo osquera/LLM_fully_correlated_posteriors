@@ -1459,4 +1459,9 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-_(none)_
+- **E44** (`44_tofu_hard.lsf`): TOFU with errors. 10 trained + 5 held-out
+  pairs per seen author (1300 trained probes, 3000 documents, 166k
+  tokens); MAP-only evaluations at 3 / 5 / 8 / 12 epochs pick the largest
+  with trained-pair accuracy <= 0.85 (correct = >= 80% of answer tokens);
+  then E38's design. Does the posterior catch TOFU errors, as on bio, or
+  not, as on underfit PopQA (E40)?

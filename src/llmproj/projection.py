@@ -150,7 +150,7 @@ def _sketched_factor(f_batch, theta, space, R, rows, rtol, sketch, oversample, s
         G = M @ M.T if vjp_only else M @ S.to(M.device).T  # S J J^T S^T, (k, k)
         eigvals, Q = torch.linalg.eigh(0.5 * (G + G.T))
         rank = int((eigvals > rtol * eigvals.max().clamp(min=0.0)).sum())
-        if rank <= k - oversample or k >= n:
+        if rank <= k - oversample or k >= n or step <= 0:  # step 0: fixed k (ablations)
             return eigvals, S.to(M.device).T @ Q, k
         k = min(n, k + step)
 
@@ -456,6 +456,8 @@ def sample_projected_posterior(
     solver: str = "alternating",
     snapshots: Sequence[int] = (),
     sketch: int | None = None,
+    max_sketch_gb: float = 16.0,
+    sketch_step: int = 64,
 ):
     """Draw ``n_samples`` from q(theta) = N(theta_map, alpha^-1 U_L U_L^T).
 
@@ -479,7 +481,8 @@ def sample_projected_posterior(
     if factors is None:
         factors = precompute_batch_pinv(f, theta, space, batches, rtol=rtol,
                                         progress=progress, row_batch=row_batch,
-                                        sketch=sketch, seed=seed + 7919)  # not eps' stream
+                                        sketch=sketch, seed=seed + 7919,  # not eps' stream
+                                        max_sketch_gb=max_sketch_gb, sketch_step=sketch_step)
     precompute_seconds = time.perf_counter() - t_pre
 
     # the same eps, in the same order, as drawing them one sample at a time

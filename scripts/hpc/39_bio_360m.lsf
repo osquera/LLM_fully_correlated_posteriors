@@ -1,0 +1,73 @@
+#!/bin/sh
+# E39: does E38 hold at a second model size? E38 (SmolLM2-135M, LoRA): the
+# sketched posterior (~3.3 fine-tunes) is the best error detector against
+# 2-, 4- and 8-member ensembles, while 2 members win on coverage. Same
+# design on SmolLM2-360M and E28's three bio corpora: theta_map, a timing
+# fine-tune (the cost unit on this node), 8 ensemble members, the sketched
+# posterior (5 and 10 sweeps), evaluated with 2-, 4-, 8-member subsets, plus
+# error_breakdown.py. Also checks that the per-batch rank stays a small
+# fraction of the rows ("J J^T columns formed ... for rank" in the log).
+# S J for k = 192 is ~4 GB at P ~5M; --max-sketch-gb 40 lets the VJP-only
+# Gram be used (the check is against the batch's full row count).
+# ~4 h per element on an H100 (10 fine-tunes of ~15 min, posterior ~45 min).
+#   bsub < scripts/hpc/39_bio_360m.lsf
+#BSUB -J "pb_360m[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=32GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_%I_360m.out
+#BSUB -e logs/%J_%I_360m.err
+
+. scripts/hpc/env.sh
+
+MODEL=HuggingFaceTB/SmolLM2-360M
+s=$LSB_JOBINDEX
+corpus=data/bio_err$s/corpus.json
+adapter=checkpoints/bio360_err${s}_lora
+samples=samples/posterior_bio360_$s.pt
+baselines=samples/baselines_bio360_$s.pt
+tag=bio360_eval$s
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model "$MODEL" --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+[ -f "$corpus" ] || { echo "missing $corpus (30_bio_errors.lsf)"; exit 1; }
+
+ft 0 "$adapter"
+[ -f figures/${tag}_map.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --base-model "$MODEL" --adapter "$adapter" --out figures/${tag}_map.json
+ft 99 "${adapter}_timing"  # the cost unit, on this node
+
+members=""
+for m in 1 2 3 4 5 6 7 8; do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 10 --snapshots 5 10 --tol 0 --sketch 192 --max-sketch-gb 40 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+[ -f figures/$tag.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --base-model "$MODEL" --adapter "$adapter" --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_alternating5_measured \
+        token/projected_alternating10_measured baseline/lora_ensemble \
+    --subsets 2 4 --subset-methods baseline/lora_ensemble \
+    --out figures/$tag.json
+
+uv run python scripts/error_breakdown.py --corpus "$corpus" --base-model "$MODEL" \
+    --adapter "$adapter" --eval figures/$tag.json \
+    --scores post="token/projected_alternating5_measured MI" ens8="baseline/lora_ensemble MI" \
+        1-conf="MAP 1-conf" \
+    --out figures/error_breakdown_bio360_$s.json
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

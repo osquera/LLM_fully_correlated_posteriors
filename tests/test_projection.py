@@ -478,3 +478,12 @@ def test_vjp_only_sketch_equals_the_jvp_sketch():
     assert a[0].rank == b[0].rank == 6 and a[0].formed == b[0].formed
     proj = lambda fa: fa.eigvecs @ torch.diag(fa.inv_eigvals) @ fa.eigvecs.T  # noqa: E731
     assert float((proj(a[0]) - proj(b[0])).norm() / proj(a[0]).norm()) < 1e-4
+
+
+def test_sketch_step_zero_keeps_the_sketch_size():
+    """--sketch-step 0 fixes k even below the rank (ablations): fewer kept
+    directions than the exact factor, never more."""
+    space, theta, f, batches = _low_rank_toy()
+    sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=4,
+                               oversample=2, sketch_step=0, max_sketch_gb=0)
+    assert sk[0].formed == 4 and sk[0].rank <= 4

@@ -1,0 +1,39 @@
+#!/bin/sh
+# E41: how small can the sketch be? E36/E38 used k = 192 (grown when a
+# batch's kept rank needs it; it never did: rank <= 176). Here k is FIXED
+# (--sketch-step 0) at 64, 96, 128 (below most batches' rank: the sketch
+# then under-projects and the measured alpha must shrink the samples) and
+# 256, plus the adaptive 192 for reference; LoRA, E28's corpus 1 and
+# theta_map, 5 sweeps, same seed. Per k: precompute time, kept rank, alpha,
+# AUROCs (figures/sketch_ab_k*_eval.json).
+# ~2 h on an H100.
+#   bsub < scripts/hpc/41_sketch_ablation.lsf
+#BSUB -J pb_skab
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_skab.out
+#BSUB -e logs/%J_skab.err
+
+. scripts/hpc/env.sh
+
+corpus=data/bio_err1/corpus.json
+adapter=checkpoints/bio_err1_lora
+for cfg in "64 0" "96 0" "128 0" "192 64" "256 0"; do
+    set -- $cfg
+    o=samples/sketch_ab_k$1.pt
+    [ -f "$o" ] || uv run python scripts/sample_posterior.py \
+        --loss-mode token --projector iterative --dataset "$corpus" --split train \
+        --n-train 100000 --max-length 96 --proj-batch-size 16 \
+        --n-samples 8 --n-iterations 5 --tol 0 --sketch "$1" --sketch-step "$2" \
+        --save-methods projected_measured isotropic_measured \
+        --alpha-tol 0.01 --adapter "$adapter" --out "$o"
+    [ -f figures/sketch_ab_k$1_eval.json ] || uv run python scripts/evaluate_bio.py \
+        --corpus "$corpus" --adapter "$adapter" --samples "$o" \
+        --methods token/projected_measured token/isotropic_measured \
+        --out figures/sketch_ab_k$1_eval.json
+    rm -f "$o"
+done

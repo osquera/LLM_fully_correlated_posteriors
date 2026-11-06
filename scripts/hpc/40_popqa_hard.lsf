@@ -1,0 +1,82 @@
+#!/bin/sh
+# E40: real facts with enough errors. E29: on PopQA the LoRA MAP was 92-98%
+# right after 20 epochs, leaving ~80 errors, mostly first-token misses, and
+# neither the posterior nor the ensemble added to the softmax. Here the
+# injection is made harder by training fewer epochs: on E29's corpora,
+# MAP-only evaluations at 2, 4 and 6 epochs pick the largest epoch count
+# whose accuracy on seen questions is <= 0.80 (~400+ errors of ~2050; bio
+# had ~500), then E38's design at that count: 8 members, the sketched
+# posterior (5 and 10 sweeps), 2-, 4-, 8-member subsets, error_breakdown.
+# ~2.5 h per element on an H100.
+#   bsub < scripts/hpc/40_popqa_hard.lsf
+#BSUB -J "pb_popqah[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 10:00
+#BSUB -o logs/%J_%I_popqah.out
+#BSUB -e logs/%J_%I_popqah.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+corpus=data/popqa$s/corpus.json
+[ -f "$corpus" ] || uv run python scripts/make_popqa_corpus.py --seed "$s" --out "$corpus"
+ft() {  # epochs, seed, out
+    [ -f "$3/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 96 --batch-size 16 --epochs "$1" --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$2" --out "$3"
+}
+seen_acc() {  # map eval json -> accuracy on seen questions (f >= 1)
+    uv run python -c "import json,sys; r=json.load(open(sys.argv[1]))['report']['per_freq']; \
+s=[(v['n'],v['map_exact_acc']) for f,v in r.items() if int(f)>=1]; \
+print(round(sum(n*a for n,a in s)/sum(n for n,_ in s),3))" "$1"
+}
+
+E=""
+for ep in 2 4 6; do
+    a=checkpoints/popqah${s}_ep${ep}_lora
+    ft "$ep" 0 "$a"
+    [ -f figures/popqah${s}_ep${ep}_map.json ] || uv run python scripts/evaluate_bio.py \
+        --corpus "$corpus" --adapter "$a" --out figures/popqah${s}_ep${ep}_map.json
+    acc=$(seen_acc figures/popqah${s}_ep${ep}_map.json)
+    echo "epochs $ep: seen accuracy $acc"
+    awk "BEGIN{exit !($acc <= 0.80)}" && E=$ep
+done
+[ -n "$E" ] || E=2
+echo "=== using $E epochs ==="
+
+adapter=checkpoints/popqah${s}_ep${E}_lora
+samples=samples/posterior_popqah$s.pt
+baselines=samples/baselines_popqah$s.pt
+members=""
+for m in 1 2 3 4 5 6 7 8; do ft "$E" "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 10 --snapshots 5 10 --tol 0 --sketch 192 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+[ -f figures/popqah_eval$s.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --adapter "$adapter" --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_alternating5_measured \
+        token/projected_alternating10_measured baseline/lora_ensemble \
+    --subsets 2 4 --subset-methods baseline/lora_ensemble \
+    --out figures/popqah_eval$s.json
+
+uv run python scripts/error_breakdown.py --corpus "$corpus" --adapter "$adapter" \
+    --eval figures/popqah_eval$s.json \
+    --scores post="token/projected_alternating5_measured MI" ens8="baseline/lora_ensemble MI" \
+        1-conf="MAP 1-conf" \
+    --out figures/error_breakdown_popqah$s.json
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

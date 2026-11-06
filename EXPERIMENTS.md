@@ -1281,5 +1281,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- The paper plan (TOFU, Laplace-LoRA, a second model size, real facts):
-  see the shared plan doc.
+- **E39** (`39_bio_360m.lsf`): E38's equal-cost design on SmolLM2-360M
+  (bio corpora 1-3): does the posterior's error-detection edge, its cost
+  in fine-tunes and the low per-batch rank hold at a second model size?
+- **E40** (`40_popqa_hard.lsf`): PopQA with fewer epochs (2 / 4 / 6, the
+  largest with seen accuracy <= 0.80), so real facts leave ~400+ errors
+  like bio; then E38's design.
+- **E41** (`41_sketch_ablation.lsf`): fixed sketch sizes 64 / 96 / 128 /
+  256 (`--sketch-step 0`) and the adaptive 192, LoRA corpus 1, 5 sweeps.
+- Next to code: TOFU loader with answer-likelihood scoring, and a
+  Laplace-LoRA (KFAC) baseline; see the shared plan doc.

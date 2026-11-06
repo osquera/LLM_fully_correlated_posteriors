@@ -102,6 +102,12 @@ def parse_args():
     ap.add_argument("--sketch", type=int, default=0,
                     help="precompute S J J^T S^T for a Gaussian sketch of this many rows "
                          "per batch, grown while the kept rank needs it (0: exact J J^T)")
+    ap.add_argument("--max-sketch-gb", type=float, default=16.0,
+                    help="keep S J (rows x P floats, worst case) on the GPU and skip the JVPs "
+                         "when it fits in this many GB")
+    ap.add_argument("--sketch-step", type=int, default=64,
+                    help="rows added to a batch's sketch while its kept rank needs them "
+                         "(0: keep --sketch fixed, for ablations)")
     ap.add_argument("--alpha-tol", type=float, default=0.01,
                     help="measured alpha: max |change in a sequence's mean NLL|, as a "
                          "fraction of the MAP's mean NLL over the projection rows")
@@ -209,6 +215,7 @@ def main():
             tol=None if args.snapshots or args.tol <= 0 else args.tol, seed=args.seed,
             vec_batch=args.vec_batch, row_batch=args.row_batch,
             solver=args.solver, snapshots=args.snapshots, sketch=args.sketch or None,
+            max_sketch_gb=args.max_sketch_gb, sketch_step=args.sketch_step,
         )
         # Hutchinson over the samples themselves; std sqrt(2 kdim / n_samples)
         kdim, n_probes = float(info["kernel_dim_est"]), args.n_samples

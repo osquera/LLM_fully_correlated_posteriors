@@ -1289,5 +1289,9 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   like bio; then E38's design.
 - **E41** (`41_sketch_ablation.lsf`): fixed sketch sizes 64 / 96 / 128 /
   256 (`--sketch-step 0`) and the adaptive 192, LoRA corpus 1, 5 sweeps.
-- Next to code: TOFU loader with answer-likelihood scoring, and a
-  Laplace-LoRA (KFAC) baseline; see the shared plan doc.
+- **E42** (`42_tofu.lsf`): E38's equal-cost design on TOFU
+  (`make_tofu_corpus.py`: 40 unseen authors, 60 / 40 / 20 / 10 seen at
+  f = 1 / 2 / 4 / 8, 5 trained + 5 held-out pairs each; 1700 probes, 84k
+  tokens). "Wrong" = under 80% of answer tokens right
+  (`evaluate_bio.py --correct-frac`; per-probe shares saved).
+- Next to code: a Laplace-LoRA (KFAC) baseline; see the shared plan doc.

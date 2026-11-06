@@ -73,6 +73,9 @@ def parse_args():
     ap.add_argument("--layers", type=int, nargs="+", default=None)
     ap.add_argument("--knn-k", type=int, default=10)
     ap.add_argument("--n-bins", type=int, default=5)
+    ap.add_argument("--correct-frac", type=float, default=1.0,
+                    help="a probe is right when at least this share of its answer tokens is "
+                         "the MAP's argmax (1 = exact match; sentence answers, e.g. TOFU: lower)")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--out", default="figures/bio_eval.json")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -181,7 +184,8 @@ def main():
                          "worst_dnll": float(dn.abs().max()), "mean_abs_dnll": float(dn.abs().mean()),
                          "frac_over_tol": float((dn.abs() > tol).float().mean()) if tol else None}
         print(f"  scored {name}")
-    correct = per_probe(map_tok["correct"].float(), enc).eq(1).numpy()  # exact match
+    token_acc = per_probe(map_tok["correct"].float(), enc)
+    correct = (token_acc >= args.correct_frac - 1e-9).numpy()  # 1.0 = exact match
 
     # hidden-state distances, fitted on the corpus tokens
     n_hidden = model.config.num_hidden_layers
@@ -232,6 +236,7 @@ def main():
     report["subsets"] = subset_summary(report, args.subset_methods, args.subsets)
     report["probe_scores"] = {k: v.tolist() for k, v in scores.items()}
     report["probe_freq"], report["probe_correct"] = freq.tolist(), correct.tolist()
+    report["probe_token_acc"], report["correct_frac"] = token_acc.tolist(), args.correct_frac
     report["probe_name"] = [q["name"] for q in probes]
 
     print("\nper training frequency: MAP exact-match accuracy and mean scores")

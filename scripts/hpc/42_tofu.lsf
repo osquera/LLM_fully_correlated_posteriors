@@ -1,0 +1,71 @@
+#!/bin/sh
+# E42: E38's equal-cost comparison on a standard benchmark. TOFU (200
+# fictitious authors x 20 QA pairs; scripts/make_tofu_corpus.py): per
+# replication 40 unseen authors and 60 / 40 / 20 / 10 authors seen at
+# f = 1 / 2 / 4 / 8, 5 trained + 5 held-out pairs per seen author (~84k
+# training tokens, bio 108k). The base model cannot know these authors.
+# Tasks as in evaluate_bio.py: unseen = fact never trained (f = 0, from
+# unseen authors or held out from seen ones; probes carry author_seen) vs
+# trained; rare; wrong = a trained probe whose answer tokens the MAP gets
+# less than 80% right (--correct-frac 0.8; TOFU answers are sentences, so
+# exact match does not apply; every probe's token share is saved, so the
+# threshold can be changed afterwards). Per replication: theta_map, a timing
+# fine-tune, 8 members, the sketched posterior at 5 and 10 sweeps, 2-, 4-,
+# 8-member subsets. Max length 128 (longest document 102 tokens).
+# ~1.5 h per element on an H100.
+#   bsub < scripts/hpc/42_tofu.lsf
+#BSUB -J "pb_tofu[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 8:00
+#BSUB -o logs/%J_%I_tofu.out
+#BSUB -e logs/%J_%I_tofu.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+FRAC=${FRAC:-0.8}
+corpus=data/tofu$s/corpus.json
+adapter=checkpoints/tofu${s}_lora
+samples=samples/posterior_tofu$s.pt
+baselines=samples/baselines_tofu$s.pt
+[ -f "$corpus" ] || uv run python scripts/make_tofu_corpus.py --seed "$s" --out "$corpus"
+ft() {  # seed, out
+    [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 128 --batch-size 16 --epochs 20 --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$1" --out "$2"
+}
+
+ft 0 "$adapter"
+[ -f figures/tofu_eval${s}_map.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --adapter "$adapter" --max-length 128 --correct-frac "$FRAC" \
+    --out figures/tofu_eval${s}_map.json
+ft 99 "${adapter}_timing"  # the cost unit, on this node
+
+members=""
+for m in 1 2 3 4 5 6 7 8; do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 128 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 10 --snapshots 5 10 --tol 0 --sketch 192 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+[ -f figures/tofu_eval$s.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --adapter "$adapter" --max-length 128 --correct-frac "$FRAC" \
+    --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_alternating5_measured \
+        token/projected_alternating10_measured baseline/lora_ensemble \
+    --subsets 2 4 --subset-methods baseline/lora_ensemble \
+    --out figures/tofu_eval$s.json
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

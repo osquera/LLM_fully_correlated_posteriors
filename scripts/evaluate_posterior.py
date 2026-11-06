@@ -34,7 +34,7 @@ import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from peft import PeftModel
-from torch.func import functional_call
+from torch.func import functional_call, jvp
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from llmproj.data import encode_texts, load_texts
@@ -125,13 +125,33 @@ def selective_report(tok: dict, with_mi: bool) -> dict:
 
 
 @torch.no_grad()
-def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size):
-    """Metrics of the BMA over ``deltas`` (n_samples, P) on one encoded set."""
+def evaluate_set(model, frozen, theta, space, deltas, enc, device, batch_size, linearize=False):
+    """Metrics of the BMA over ``deltas`` (n_samples, P) on one encoded set.
+
+    linearize: score each sample by the network linearised at theta,
+    logits(theta) + J delta (one JVP per sample; the GLM predictive of
+    linearised Laplace, e.g. Laplace-LoRA), instead of the network at
+    theta + delta."""
     params = []
     for d in deltas:
         upd = space.unflatten(d.to(device=space.device, dtype=space.dtype))
-        params.append({**frozen, **{n: theta[n] + u for n, u in upd.items()}})
+        if linearize:
+            params.append((frozen, {n: theta[n] for n in upd}, upd))
+        else:
+            params.append({**frozen, **{n: theta[n] + u for n, u in upd.items()}})
     return evaluate_params(model, params, enc, device, batch_size)
+
+
+def _logits(model, prm, ids, mask):
+    """Logits at a full parameter dict, or of the linearised network for a
+    (frozen, theta, tangent) triple: logits(theta) + J tangent."""
+    kw = {"input_ids": ids, "attention_mask": mask}
+    if isinstance(prm, tuple):
+        frozen, theta, tangent = prm
+        y, jy = jvp(lambda th: functional_call(model, {**frozen, **th}, args=(), kwargs=kw).logits,
+                    (theta,), (tangent,))
+        return y + jy
+    return functional_call(model, prm, args=(), kwargs=kw).logits
 
 
 def evaluate_params(model, params, enc, device, batch_size):
@@ -157,9 +177,8 @@ def evaluate_params(model, params, enc, device, batch_size):
 
         p_bar, h_mean = None, None
         for s, prm in enumerate(params):
-            out = functional_call(model, prm, args=(),
-                                  kwargs={"input_ids": ids, "attention_mask": mask})
-            logp = F.log_softmax(out.logits[:, :-1, :].float(), dim=-1)
+            out = _logits(model, prm, ids, mask)
+            logp = F.log_softmax(out[:, :-1, :].float(), dim=-1)
             p = logp.exp()
             nll = -logp.gather(-1, tgt[..., None]).squeeze(-1)
             h = -(p * logp).sum(-1)

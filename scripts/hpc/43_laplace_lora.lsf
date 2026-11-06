@@ -1,0 +1,65 @@
+#!/bin/sh
+# E43: Laplace-LoRA, the standard Bayesian-LoRA baseline, against the
+# sketched posterior and LoRA ensembles (E38). On E28's three bio corpora and
+# theta_maps: a KFAC Laplace over the LoRA weights (Fisher with sampled
+# labels, prior precision by the Laplace evidence;
+# scripts/build_laplace_samples.py), scored four ways:
+#   laplace_kfac          sampled through the network, as drawn
+#   laplace_kfac~lin      through the network linearised at theta_map
+#                         (logits + J delta), Laplace-LoRA's own predictive
+#   laplace_kfac_norm     rescaled to the posterior's mean ||delta||
+#   laplace_kfac_norm~lin the same, linearised
+# next to E38's posterior (rerun: same seed, 5 sweeps, sketch 192) and
+# 2-, 4-, 8-member ensembles (E28's members 1-8), in one report so the
+# logistic test and the bootstrap compare them directly.
+# ~1 h per element on an H100.
+#   bsub < scripts/hpc/43_laplace_lora.lsf
+#BSUB -J "pb_lap[1-3]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=24GB]"
+#BSUB -W 6:00
+#BSUB -o logs/%J_%I_lap.out
+#BSUB -e logs/%J_%I_lap.err
+
+. scripts/hpc/env.sh
+
+s=$LSB_JOBINDEX
+corpus=data/bio_err$s/corpus.json
+adapter=checkpoints/bio_err${s}_lora
+samples=samples/posterior_lap$s.pt
+baselines=samples/baselines_lap$s.pt
+laplace=samples/laplace_bio$s.pt
+[ -d "$adapter" ] || { echo "missing $adapter (30_bio_errors.lsf)"; exit 1; }
+members=""
+for m in 1 2 3 4 5 6 7 8; do
+    [ -f "${adapter}_ens$m/run.json" ] || { echo "missing ${adapter}_ens$m"; exit 1; }
+    members="$members ${adapter}_ens$m"
+done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 5 --tol 0 --sketch 192 \
+    --save-methods projected_measured isotropic_measured \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+
+[ -f "$laplace" ] || uv run python scripts/build_laplace_samples.py \
+    --adapter "$adapter" --dataset "$corpus" --max-length 96 \
+    --like "$samples" --match-method projected_measured --out "$laplace"
+
+[ -f figures/laplace_eval$s.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --adapter "$adapter" --samples "$samples" "$baselines" "$laplace" \
+    --methods token/projected_measured token/isotropic_measured baseline/lora_ensemble \
+        baseline/laplace_kfac baseline/laplace_kfac_norm \
+    --linearize baseline/laplace_kfac baseline/laplace_kfac_norm \
+    --subsets 2 4 --subset-methods baseline/lora_ensemble \
+    --out figures/laplace_eval$s.json
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines" "$laplace"

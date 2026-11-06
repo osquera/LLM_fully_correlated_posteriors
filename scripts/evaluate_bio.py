@@ -67,6 +67,9 @@ def parse_args():
     ap.add_argument("--norms", type=float, nargs="*", default=[],
                     help="also evaluate token-mode posterior methods rescaled to these ||delta||")
     ap.add_argument("--max-length", type=int, default=96, help="corpus encoding for the fit cost")
+    ap.add_argument("--linearize", nargs="*", default=[],
+                    help="method keys also scored by the network linearised at theta_map "
+                         "(logits + J delta), as KEY~lin: the GLM predictive of Laplace-LoRA")
     ap.add_argument("--subsets", type=int, nargs="*", default=[])
     ap.add_argument("--subset-methods", nargs="*",
                     default=["baseline/lora_ensemble", "token/projected_measured"])
@@ -160,6 +163,9 @@ def main():
             if mode == "token":
                 for n in args.norms:
                     methods[f"{key}@{n:g}"] = d.float() * (n / float(d.norm(dim=1).mean()))
+    for name in args.linearize:
+        if name in methods:
+            methods[f"{name}~lin"] = methods[name]
     for name in args.subset_methods:
         for K in args.subsets:
             if name in methods:
@@ -171,8 +177,10 @@ def main():
     corpus_enc = encode_texts(tokenizer, corpus["texts"], args.max_length, loss_on="all")
     scores, map_tok, fit, map_doc = {}, None, {}, None
     for name, d in methods.items():
-        _, s, _ = evaluate_set(model, frozen, theta, space, d, enc, args.device, args.batch_size)
-        _, _, doc_nll = evaluate_set(model, frozen, theta, space, d, corpus_enc, args.device, args.batch_size)
+        lin = name.endswith("~lin")
+        _, s, _ = evaluate_set(model, frozen, theta, space, d, enc, args.device, args.batch_size, lin)
+        _, _, doc_nll = evaluate_set(model, frozen, theta, space, d, corpus_enc, args.device,
+                                     args.batch_size, lin)
         if name == "map":
             map_tok, map_doc = s["tok"], doc_nll[0]
             scores["MAP entropy"] = per_probe(s["tok"]["entropy"], enc)

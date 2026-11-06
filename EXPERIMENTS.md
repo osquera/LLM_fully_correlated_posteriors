@@ -1294,4 +1294,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   f = 1 / 2 / 4 / 8, 5 trained + 5 held-out pairs each; 1700 probes, 84k
   tokens). "Wrong" = under 80% of answer tokens right
   (`evaluate_bio.py --correct-frac`; per-probe shares saved).
-- Next to code: a Laplace-LoRA (KFAC) baseline; see the shared plan doc.
+- **E43** (`43_laplace_lora.lsf`): Laplace-LoRA (`build_laplace_samples.py`:
+  KFAC over the LoRA weights, Fisher with sampled labels, prior precision
+  by the Laplace evidence) on E28's bio corpora, scored through the network
+  and linearised at theta_map (`evaluate_bio.py --linearize`: logits + J
+  delta, Laplace-LoRA's own predictive), as drawn and rescaled to the
+  posterior's norm; next to E38's posterior and 2/4/8-member ensembles in
+  one report.

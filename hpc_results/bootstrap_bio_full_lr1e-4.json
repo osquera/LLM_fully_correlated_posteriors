@@ -1,0 +1,172 @@
+{
+  "evals": [
+    "hpc_results/bio_full1_lr1e-4_eval.json",
+    "hpc_results/bio_full2_lr1e-4_eval.json",
+    "hpc_results/bio_full3_lr1e-4_eval.json"
+  ],
+  "ref": "token/projected_measured MI",
+  "tasks": {
+    "unseen": {
+      "per_replication": [
+        {
+          "n_pos": 160,
+          "n_neg": 3120,
+          "token/projected_measured MI": 0.779210466124793,
+          "baseline/ensemble MI": 0.8906978355358901,
+          "baseline/ensemble[2:0] MI": 0.8322352455314027,
+          "MAP 1-conf": 0.7281007521451797
+        },
+        {
+          "n_pos": 160,
+          "n_neg": 3120,
+          "token/projected_measured MI": 0.7973833226019433,
+          "baseline/ensemble MI": 0.8208030717420193,
+          "baseline/ensemble[2:0] MI": 0.8336735237040226,
+          "MAP 1-conf": 0.6697555254468165
+        },
+        {
+          "n_pos": 160,
+          "n_neg": 3120,
+          "token/projected_measured MI": 0.6857654441466348,
+          "baseline/ensemble MI": 0.8793613851154072,
+          "baseline/ensemble[2:0] MI": 0.8525828878958479,
+          "MAP 1-conf": 0.5527098157981665
+        }
+      ],
+      "gaps": {
+        "baseline/ensemble MI": {
+          "mean": -0.1095010198399818,
+          "ci95": [
+            -0.14464528399135965,
+            -0.05141983648027469
+          ],
+          "p_le_0": 1.0
+        },
+        "baseline/ensemble[2:0] MI": {
+          "mean": -0.08537747475263402,
+          "ci95": [
+            -0.11991255824244593,
+            -0.02623737802269061
+          ],
+          "p_le_0": 0.998
+        },
+        "MAP 1-conf": {
+          "mean": 0.10393104649440284,
+          "ci95": [
+            0.0761019067403929,
+            0.1454468460160919
+          ],
+          "p_le_0": 0.0
+        }
+      }
+    },
+    "rare": {
+      "per_replication": [
+        {
+          "n_pos": 1360,
+          "n_neg": 320,
+          "token/projected_measured MI": 0.7431892878038546,
+          "baseline/ensemble MI": 0.9289896819410075,
+          "baseline/ensemble[2:0] MI": 0.8875194126562972,
+          "MAP 1-conf": 0.5976295724541218
+        },
+        {
+          "n_pos": 1360,
+          "n_neg": 320,
+          "token/projected_measured MI": 0.8519699734013949,
+          "baseline/ensemble MI": 0.8809435207823588,
+          "baseline/ensemble[2:0] MI": 0.9265570854414146,
+          "MAP 1-conf": 0.5921233370746458
+        },
+        {
+          "n_pos": 1360,
+          "n_neg": 320,
+          "token/projected_measured MI": 0.7725249376985925,
+          "baseline/ensemble MI": 0.9508593840875251,
+          "baseline/ensemble[2:0] MI": 0.8892635249117572,
+          "MAP 1-conf": 0.706762979834211
+        }
+      ],
+      "gaps": {
+        "baseline/ensemble MI": {
+          "mean": -0.13103612930234979,
+          "ci95": [
+            -0.17819297420893748,
+            -0.08913628413810544
+          ],
+          "p_le_0": 1.0
+        },
+        "baseline/ensemble[2:0] MI": {
+          "mean": -0.11188527470187563,
+          "ci95": [
+            -0.15921768923717639,
+            -0.06381683450930248
+          ],
+          "p_le_0": 1.0
+        },
+        "MAP 1-conf": {
+          "mean": 0.15705610318028781,
+          "ci95": [
+            0.10410595310330825,
+            0.20768397881864514
+          ],
+          "p_le_0": 0.0
+        }
+      }
+    },
+    "wrong": {
+      "per_replication": [
+        {
+          "n_pos": 378,
+          "n_neg": 2742,
+          "token/projected_measured MI": 0.667068913032874,
+          "baseline/ensemble MI": 0.7837004857897164,
+          "baseline/ensemble[2:0] MI": 0.7480553494531745,
+          "MAP 1-conf": 0.5224799965664471
+        },
+        {
+          "n_pos": 550,
+          "n_neg": 2570,
+          "token/projected_measured MI": 0.7346499875124267,
+          "baseline/ensemble MI": 0.6933560427788482,
+          "baseline/ensemble[2:0] MI": 0.7419084703987691,
+          "MAP 1-conf": 0.7012172288487375
+        },
+        {
+          "n_pos": 433,
+          "n_neg": 2687,
+          "token/projected_measured MI": 0.7279753112684948,
+          "baseline/ensemble MI": 0.8405862363846299,
+          "baseline/ensemble[2:0] MI": 0.7962606422755322,
+          "MAP 1-conf": 0.6095186089316114
+        }
+      ],
+      "gaps": {
+        "baseline/ensemble MI": {
+          "mean": -0.06264951771313303,
+          "ci95": [
+            -0.09868176637389545,
+            0.027022212611516494
+          ],
+          "p_le_0": 0.852
+        },
+        "baseline/ensemble[2:0] MI": {
+          "mean": -0.0521767501045601,
+          "ci95": [
+            -0.08941374881459567,
+            0.030850086108157242
+          ],
+          "p_le_0": 0.809
+        },
+        "MAP 1-conf": {
+          "mean": 0.09882612582233319,
+          "ci95": [
+            0.04287283212462698,
+            0.12016344196663944
+          ],
+          "p_le_0": 0.0
+        }
+      }
+    }
+  }
+}

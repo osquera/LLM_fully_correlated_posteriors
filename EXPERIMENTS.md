@@ -1199,15 +1199,83 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   ensemble); 5 sweeps (E27: nearly as good) would give ~15 min. Next
   levers: fewer sweeps, and k (192 never had to grow: per-batch rank <= 176).
 
+## E37 Full fine-tuning at lr 1e-4 vs LoRA (bio, three replications)
+
+- **Date / job.** 2026-11-05 to 11-06; `37_bio_full_lr.lsf` (job 29901454).
+  E31's design at E35's learning rate: full theta_map (lr 1e-4, 20 epochs),
+  8-member full ensemble, projected posterior over all weights with the
+  sketched precompute (192), 10 sweeps, isotropic prior
+  (`bio_full{s}_lr1e-4_eval.json`, `error_breakdown_bio_full{s}_lr1e-4.json`,
+  `phrasings_bio_full{s}_lr1e-4.json`, `bootstrap_bio_full_lr1e-4.json`).
+- **Results.** The full MAP now matches or beats LoRA: f = 1 accuracy
+  0.76 / 0.69 / 0.73 (LoRA 0.67 / 0.68 / 0.73), in every phrasing 0.47 /
+  0.39 / 0.40 (LoRA 0.37 / 0.34 / 0.38); 378 / 550 / 433 errors (LoRA 584
+  / 561 / 443). Within-entropy AUROC, mean of 3 (LoRA world in brackets):
+
+  | task | full post | full ens8 | full ens2 | MAP 1-conf |
+  |---|---|---|---|---|
+  | unseen | 0.754 (0.796) | **0.864** (0.879) | 0.839 | 0.650 (0.596) |
+  | rare | 0.789 (0.831) | **0.920** (0.979) | 0.901 | 0.632 (0.728) |
+  | wrong | 0.710 (0.794) | **0.773** (0.770) | 0.762 | 0.611 (0.713) |
+
+  Bootstrap, full post minus: ens8 unseen -0.110 [-0.145, -0.051], rare
+  -0.131, wrong -0.063 [-0.099, +0.027]; MAP 1-conf on wrong +0.099
+  [+0.043, +0.120]. Held-out logistic on wrong: the softmax alone is
+  already 0.913, + post +0.008, + ens8 +0.002 (LoRA world: softmax 0.867,
+  + post +0.022). The posterior still leads on later-token errors in two
+  of three replications (0.80-0.81 vs ens 0.58-0.83) and trails on
+  first-token errors (0.55-0.66 vs 0.70-0.87). Fit: posterior ‖δ‖
+  2.5-6.2, 0% of sequences over tol; ensemble members ‖δ‖ 63-78 (E31:
+  11.6), 96% over.
+- **Showed.** With a well-trained full MAP the full-weight posterior is
+  worse than the LoRA one on every task (-0.04 to -0.08), and the full
+  ensemble beats it everywhere (wrong: -0.063, CI touching 0). LoRA's
+  error-detection edge (E28) does not carry over to full fine-tuning: the
+  full MAP's softmax already ranks its errors well in the logistic test
+  (0.913) and neither score adds much. The posterior still beats the
+  MAP's confidence within entropy strata and keeps the fit. For this
+  paper, LoRA is the setting where the projected posterior is worth it.
+
+## E38 Sketched LoRA posterior vs LoRA ensembles at equal cost
+
+- **Date / job.** 2026-11-05 to 11-06; `38_lora_equal_cost.lsf` (job
+  29901456). E28's corpora and theta_maps; posterior with `--sketch 192`
+  and the VJP-only Gram, 10 sweeps with a 5-sweep snapshot (each its own
+  measured alpha); E28's members 1-8 as 2-, 4- and 8-member ensembles
+  (`bio_sketch_eval{s}.json`, `posterior_bio_sketch{s}.json`,
+  `bootstrap_bio_sketch.json`).
+- **Cost.** Precompute 476-479 s (E36's JVP sketch: 1084 s on a slower
+  node; E27's exact: 39 min); 5 sweeps 374-381 s, 10 sweeps 748-762 s;
+  alpha search 286-334 s for both snapshots. Posterior at 5 sweeps
+  ~1000-1100 s, at 10 ~1500 s. With E28's 311 s per LoRA fine-tune that
+  is ~3.4 fine-tunes at 5 sweeps and ~4.9 at 10 (the same-node timing
+  fine-tune is in the job logs).
+- **Results.** Within-entropy AUROC, mean of 3 (ens2 / ens4 = mean over
+  the disjoint member groups):
+
+  | task | post 5 sweeps | post 10 | ens2 | ens4 | ens8 | MAP 1-conf |
+  |---|---|---|---|---|---|---|
+  | unseen | 0.788 | 0.790 | 0.824 | 0.861 | 0.879 | 0.596 |
+  | rare | 0.814 | 0.823 | 0.931 | 0.962 | 0.979 | 0.728 |
+  | wrong | **0.784** | **0.786** | 0.736 | 0.759 | 0.770 | 0.713 |
+
+  Bootstrap, post (5 sweeps) minus: on wrong, ens2 [2:0] +0.037 [+0.018,
+  +0.069], ens4 [4:0] +0.015 [-0.001, +0.053], ens8 +0.014 [-0.003,
+  +0.051], MAP 1-conf +0.070; on unseen, ens2 -0.054 [-0.080, -0.025];
+  on rare, ens2 -0.112. Held-out logistic gain over the softmax on wrong:
+  post +0.021, ens2 -0.006, ens4 0.000, ens8 +0.004; on unseen post
+  +0.060 vs ens2 +0.081, ens4 +0.107.
+- **Showed.** At ~3.4 fine-tunes the LoRA posterior is the best of the
+  four scores on wrong answers: clearly ahead of a 2-member ensemble,
+  narrowly ahead of 4 and 8 members (CIs touching 0), and the only one
+  that adds to the softmax in the logistic test. On coverage even 2
+  members beat it. 5 sweeps = 10 sweeps. The posterior's niche is
+  catching errors on facts the model was trained on, at a cost between a
+  3- and a 4-member ensemble.
+
 ---
 
 ## Pending
 
-- **E37** (`37_bio_full_lr.lsf`): E31 at lr 1e-4 (E35), the sketched
-  precompute (E36), isotropic prior only; full MAP, posterior and 8-member
-  ensemble on the three bio corpora, one at a time (disk).
-- **E38** (`38_lora_equal_cost.lsf`): the sketched LoRA posterior, now
-  with S J J^T S^T formed as (S J)(S J)^T when S J fits (no JVPs; ~2x more
-  on the precompute), at 5 and 10 sweeps, against 2-, 4- and 8-member LoRA
-  ensembles, with one LoRA fine-tune timed on the same node as the cost
-  unit. Expected posterior cost ~2-3 fine-tunes.
+- The paper plan (TOFU, Laplace-LoRA, a second model size, real facts):
+  see the shared plan doc.

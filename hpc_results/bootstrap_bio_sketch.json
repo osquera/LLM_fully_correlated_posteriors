@@ -1,0 +1,205 @@
+{
+  "evals": [
+    "hpc_results/bio_sketch_eval1.json",
+    "hpc_results/bio_sketch_eval2.json",
+    "hpc_results/bio_sketch_eval3.json"
+  ],
+  "ref": "token/projected_alternating5_measured MI",
+  "tasks": {
+    "unseen": {
+      "per_replication": [
+        {
+          "n_pos": 160,
+          "n_neg": 3120,
+          "token/projected_alternating5_measured MI": 0.7749593920821782,
+          "baseline/lora_ensemble[2:0] MI": 0.8379112613217813,
+          "baseline/lora_ensemble[4:0] MI": 0.8583294382286236,
+          "baseline/lora_ensemble MI": 0.8712211533643952,
+          "MAP 1-conf": 0.5801683068823212
+        },
+        {
+          "n_pos": 160,
+          "n_neg": 3120,
+          "token/projected_alternating5_measured MI": 0.7952758342907708,
+          "baseline/lora_ensemble[2:0] MI": 0.856432308258982,
+          "baseline/lora_ensemble[4:0] MI": 0.8766837559898313,
+          "baseline/lora_ensemble MI": 0.8958408280578507,
+          "MAP 1-conf": 0.5948471262277963
+        },
+        {
+          "n_pos": 160,
+          "n_neg": 3120,
+          "token/projected_alternating5_measured MI": 0.7938206163493323,
+          "baseline/lora_ensemble[2:0] MI": 0.8306442914989882,
+          "baseline/lora_ensemble[4:0] MI": 0.8503897905045351,
+          "baseline/lora_ensemble MI": 0.8687970104325151,
+          "MAP 1-conf": 0.612971350903297
+        }
+      ],
+      "gaps": {
+        "baseline/lora_ensemble[2:0] MI": {
+          "mean": -0.05364400611915673,
+          "ci95": [
+            -0.07970555651632516,
+            -0.02507615403506458
+          ],
+          "p_le_0": 0.999
+        },
+        "baseline/lora_ensemble[4:0] MI": {
+          "mean": -0.0737823806669029,
+          "ci95": [
+            -0.10009391043762352,
+            -0.046449700908934494
+          ],
+          "p_le_0": 1.0
+        },
+        "baseline/lora_ensemble MI": {
+          "mean": -0.09060104971082657,
+          "ci95": [
+            -0.11611896831687249,
+            -0.0646441056441815
+          ],
+          "p_le_0": 1.0
+        },
+        "MAP 1-conf": {
+          "mean": 0.19202301956962223,
+          "ci95": [
+            0.1604477579798164,
+            0.22154312376966698
+          ],
+          "p_le_0": 0.0
+        }
+      }
+    },
+    "rare": {
+      "per_replication": [
+        {
+          "n_pos": 1360,
+          "n_neg": 320,
+          "token/projected_alternating5_measured MI": 0.8407650786454819,
+          "baseline/lora_ensemble[2:0] MI": 0.9205702030905769,
+          "baseline/lora_ensemble[4:0] MI": 0.9563736440036783,
+          "baseline/lora_ensemble MI": 0.9765139873587275,
+          "MAP 1-conf": 0.7447163470649584
+        },
+        {
+          "n_pos": 1360,
+          "n_neg": 320,
+          "token/projected_alternating5_measured MI": 0.8289422559522076,
+          "baseline/lora_ensemble[2:0] MI": 0.9155293162165685,
+          "baseline/lora_ensemble[4:0] MI": 0.952340663674683,
+          "baseline/lora_ensemble MI": 0.9804512577464379,
+          "MAP 1-conf": 0.6590491404281059
+        },
+        {
+          "n_pos": 1360,
+          "n_neg": 320,
+          "token/projected_alternating5_measured MI": 0.7731777917183832,
+          "baseline/lora_ensemble[2:0] MI": 0.9423685738668248,
+          "baseline/lora_ensemble[4:0] MI": 0.9756014897043986,
+          "baseline/lora_ensemble MI": 0.978914237001805,
+          "MAP 1-conf": 0.7809090363933592
+        }
+      ],
+      "gaps": {
+        "baseline/lora_ensemble[2:0] MI": {
+          "mean": -0.11186098895263252,
+          "ci95": [
+            -0.15980139522036219,
+            -0.07382233356842156
+          ],
+          "p_le_0": 1.0
+        },
+        "baseline/lora_ensemble[4:0] MI": {
+          "mean": -0.14714355702222906,
+          "ci95": [
+            -0.19460827964202077,
+            -0.1119176144152321
+          ],
+          "p_le_0": 1.0
+        },
+        "baseline/lora_ensemble MI": {
+          "mean": -0.16433145193029927,
+          "ci95": [
+            -0.20998196620519935,
+            -0.12814563743205498
+          ],
+          "p_le_0": 1.0
+        },
+        "MAP 1-conf": {
+          "mean": 0.08607020080988308,
+          "ci95": [
+            0.0434387135252656,
+            0.15783151574100016
+          ],
+          "p_le_0": 0.001
+        }
+      }
+    },
+    "wrong": {
+      "per_replication": [
+        {
+          "n_pos": 584,
+          "n_neg": 2536,
+          "token/projected_alternating5_measured MI": 0.8120101670477885,
+          "baseline/lora_ensemble[2:0] MI": 0.7305808137884398,
+          "baseline/lora_ensemble[4:0] MI": 0.7424668732748262,
+          "baseline/lora_ensemble MI": 0.7315033688613152,
+          "MAP 1-conf": 0.7226409984366303
+        },
+        {
+          "n_pos": 561,
+          "n_neg": 2559,
+          "token/projected_alternating5_measured MI": 0.7333475051854365,
+          "baseline/lora_ensemble[2:0] MI": 0.7592012259416281,
+          "baseline/lora_ensemble[4:0] MI": 0.772178339000981,
+          "baseline/lora_ensemble MI": 0.7767256862371136,
+          "MAP 1-conf": 0.701634586688376
+        },
+        {
+          "n_pos": 443,
+          "n_neg": 2677,
+          "token/projected_alternating5_measured MI": 0.8060779143095745,
+          "baseline/lora_ensemble[2:0] MI": 0.7495013745170344,
+          "baseline/lora_ensemble[4:0] MI": 0.7931508106101889,
+          "baseline/lora_ensemble MI": 0.8014103995772331,
+          "MAP 1-conf": 0.7159277063725628
+        }
+      ],
+      "gaps": {
+        "baseline/lora_ensemble[2:0] MI": {
+          "mean": 0.0373840574318991,
+          "ci95": [
+            0.018487032385651428,
+            0.06901658893595672
+          ],
+          "p_le_0": 0.001
+        },
+        "baseline/lora_ensemble[4:0] MI": {
+          "mean": 0.01454652121893448,
+          "ci95": [
+            -0.0008050047673421552,
+            0.052933676315978506
+          ],
+          "p_le_0": 0.034
+        },
+        "baseline/lora_ensemble MI": {
+          "mean": 0.013932043955712533,
+          "ci95": [
+            -0.002604463193035859,
+            0.050736388196082206
+          ],
+          "p_le_0": 0.039
+        },
+        "MAP 1-conf": {
+          "mean": 0.07041076501507681,
+          "ci95": [
+            0.0517521106729083,
+            0.09847115658295952
+          ],
+          "p_le_0": 0.0
+        }
+      }
+    }
+  }
+}

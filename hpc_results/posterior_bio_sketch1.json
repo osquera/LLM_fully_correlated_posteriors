@@ -1,0 +1,120 @@
+{
+  "info": {
+    "kernel_dim_est": 1964289.46875,
+    "kernel_residual_mean": 0.11602324899286032,
+    "kernel_residual_max": 0.12942449748516083,
+    "precompute_seconds": 478.62678419900476,
+    "P": 1981440,
+    "alpha": 1.0,
+    "n_iterations": 10,
+    "solver": "alternating",
+    "snapshots": {
+      "5": {
+        "seconds": 374.1564057089854,
+        "kernel_residual_max": 0.22658106684684753,
+        "alpha": 781997.6888401258,
+        "radii": [
+          1.8735110174132972,
+          1.8735110174132972,
+          1.8735110174132972,
+          1.8735110174132972,
+          1.5848932266235352,
+          1.5848932266235352,
+          1.5848932266235352,
+          1.5848932266235352
+        ]
+      },
+      "10": {
+        "seconds": 748.2842863229744,
+        "kernel_residual_max": 0.12942446768283844,
+        "alpha": 387719.8205670305,
+        "radii": [
+          2.758195147124252,
+          2.758195147124252,
+          2.758195147124252,
+          2.758195147124252,
+          2.5118863582611084,
+          2.2508354294610533,
+          2.2508354294610533,
+          2.2508354294610533
+        ]
+      }
+    },
+    "n_rows": 122180,
+    "n_target_tokens": 108024,
+    "loss_mode": "token",
+    "loss_on": "all",
+    "projector": "iterative",
+    "kernel_dim": 1964289.46875,
+    "alphas": {
+      "measured": 387719.8205670305,
+      "closed_form": 2.7393576818878733
+    },
+    "alpha_tol_nats": 0.0013007909059524537,
+    "radii": [
+      2.758195147124252,
+      2.758195147124252,
+      2.758195147124252,
+      2.758195147124252,
+      2.5118863582611084,
+      2.2508354294610533,
+      2.2508354294610533,
+      2.2508354294610533
+    ],
+    "norms": {
+      "projected_measured": 2.2507283687591553,
+      "isotropic_measured": 2.2607529163360596,
+      "projected_closed_form": 846.755126953125,
+      "isotropic_closed_form": 850.5259399414062,
+      "projected_alternating5_measured": 1.5850368738174438,
+      "projected_alternating10_measured": 2.2507283687591553
+    },
+    "theta_norm_sq": 6260.78564453125,
+    "timings": {
+      "projection": 1273.903855356999,
+      "precompute": 478.62678419900476,
+      "measure_alpha": 334.3502431680099
+    }
+  },
+  "args": {
+    "base_model": "HuggingFaceTB/SmolLM2-135M",
+    "adapter": "checkpoints/bio_err1_lora",
+    "include": [
+      "lora_A",
+      "lora_B"
+    ],
+    "prior_scale": "none",
+    "dataset": "data/bio_err1/corpus.json",
+    "split": "train",
+    "text_field": "text",
+    "max_length": 96,
+    "n_train": 100000,
+    "proj_batch_size": 16,
+    "loss_mode": "token",
+    "loss_on": "all",
+    "projector": "iterative",
+    "max_gb": 8.0,
+    "n_samples": 8,
+    "n_iterations": 10,
+    "solver": "alternating",
+    "snapshots": [
+      5,
+      10
+    ],
+    "tol": 0.0,
+    "rtol": 1e-06,
+    "no_acceleration": false,
+    "vec_batch": null,
+    "row_batch": 16,
+    "sketch": 192,
+    "alpha_tol": 0.01,
+    "alpha_directions": null,
+    "alpha_all_radii": false,
+    "tf32": false,
+    "save_methods": null,
+    "save_dtype": "float32",
+    "out": "samples/posterior_bio_sketch1.pt",
+    "device": "cuda",
+    "seed": 0
+  }
+}

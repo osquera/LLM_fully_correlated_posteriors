@@ -120,9 +120,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    keeps the fit and the posterior's edge over the softmax on errors
    (+0.05), and rescaling the prior per tensor changes nothing; but it
    costs ~2x the LoRA posterior and the full ensemble becomes the
-   (narrowly) better error detector. That run's full MAP was undertrained
-   (lr 2e-5); at lr 1e-4 full fine-tuning answers more probes than LoRA
-   in every phrasing (E35), so the comparison needs repeating there.
+   (narrowly) better error detector. At lr 1e-4 (E35, E37) the full MAP
+   answers more probes than LoRA, and there the full posterior loses to
+   the full ensemble on every task; its error-detection edge is a LoRA
+   result. With the sketch, the LoRA posterior costs ~3.4 fine-tunes and
+   is the best error detector of the posterior and 2-, 4-, 8-member
+   ensembles, while 2 members already beat it on coverage (E38).
 
 ---
 

@@ -35,7 +35,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Current picture
 
-*(as of 2026-11-05; update when an entry changes it)*
+*(as of 2026-11-06; update when an entry changes it)*
 
 1. **Keeps the fit.** At matched sample norm the token-projected posterior
    leaves training and test NLL at the MAP's and breaks the tolerance on 1.8%
@@ -126,6 +126,18 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    result. With the sketch, the LoRA posterior costs ~3.3 fine-tunes and
    is the best error detector of the posterior and 2-, 4-, 8-member
    ensembles, while 2 members already beat it on coverage (E38).
+11. **E38's error-detection win is narrow.** It does not hold at
+   SmolLM2-360M (ens4 / ens8 ahead by 0.05-0.07, posterior ~4.4
+   fine-tunes; E39), on harder PopQA (below the MAP's confidence, E40),
+   and TOFU leaves no errors at 20 epochs (E42). What holds in every bio
+   setting (135M, 360M) is the held-out logistic test: the posterior
+   adds ~+0.02 to the softmax on wrong answers where ensemble MI adds
+   ~0. On coverage the posterior's best showings are TOFU unseen
+   authors (level with 8 members, ahead of 2-4) and PopQA unseen facts
+   (ahead of 2 members, level with 4-8). The per-batch rank is 15-33% of
+   the rows on every corpus (highest on the underfit PopQA model), and
+   the sketch needs k above it (E41). Cost in fine-tunes depends on the
+   fine-tune: 3.3 (bio 135M) to ~18 (6-epoch PopQA).
 
 ---
 
@@ -1277,23 +1289,130 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   catching errors on facts the model was trained on, at a cost between a
   3- and a 4-member ensemble.
 
+## E39 SmolLM2-360M: posterior vs ensembles at equal cost
+
+- **Date / job.** 2026-11-06; `39_bio_360m.lsf` (job 29905055). E28's bio
+  corpora 1-3 on SmolLM2-360M (LoRA P = 3.52M), E38's design: sketch 192
+  with the VJP-only Gram (`--max-sketch-gb 40`), 5 and 10 sweeps, members
+  1-8 (`bio360_eval{s}.json`, `posterior_bio360_{s}.json`,
+  `bootstrap_bio360.json`, `error_breakdown_bio360_{s}.json`).
+- **Cost.** Fine-tune 362-370 s (10 per element; 135M: ~305 s).
+  Precompute 927-952 s (135M: ~478 s); per-batch rank 18.8-19.8k of
+  122k rows (15-16%, 27.3k J J^T columns formed); 5 sweeps 504-513 s;
+  alpha 306-550 s for both snapshots. Posterior at 5 sweeps ~1600 s =
+  ~4.4 fine-tunes (135M: 3.3), at 10 ~2250 s = ~6.2. The posterior's
+  cost grows with P, the fine-tune's barely.
+- **Accuracy.** MAP exact match at f = 1: 0.74-0.78 (135M: 0.67-0.73);
+  331-404 wrong of 3120 seen probes.
+- **Results.** Within-entropy AUROC, mean of 3 (ens2 / ens4 = mean over
+  the disjoint member groups):
+
+  | task | post 5 | post 10 | ens2 | ens4 | ens8 | MAP 1-conf |
+  |---|---|---|---|---|---|---|
+  | unseen | 0.817 | 0.818 | 0.871 | 0.898 | 0.918 | 0.558 |
+  | rare | 0.801 | 0.811 | 0.912 | 0.950 | 0.974 | 0.591 |
+  | wrong | 0.764 | 0.768 | 0.786 | 0.814 | 0.836 | 0.658 |
+
+  Bootstrap, post 5 minus (first groups): on wrong, ens2 [2:0] -0.033
+  [-0.077, +0.024], ens4 [4:0] -0.065 [-0.112, -0.003], ens8 -0.072
+  [-0.122, -0.013], MAP 1-conf +0.105 [+0.073, +0.142]; on unseen ens2
+  -0.056, on rare ens2 -0.119. Per replication on wrong the posterior is
+  0.710 / 0.822 / 0.759 (ens8 0.841 / 0.815 / 0.852): large spread.
+  Held-out logistic gain over the softmax on wrong: post +0.020, ens2
+  -0.005, ens4 0.000, ens8 +0.004 (as at 135M); on unseen post +0.056 vs
+  ens2 +0.067, ens4 +0.085.
+- **Showed.** E38's headline does not carry to 360M: ensembles of 4+
+  members beat the posterior on wrong answers, at a cost ratio that also
+  moved against it (4.4 fine-tunes). What survives at both sizes is the
+  logistic test: the posterior is the only score that adds to the softmax
+  on wrong answers (+0.02); ensemble MI is mostly redundant with the
+  softmax there. The per-batch rank stays a small fraction of the rows.
+
+## E40 Harder PopQA: real facts with ~600 errors
+
+- **Date / job.** 2026-11-06; `40_popqa_hard.lsf` (job 29905056). E29's
+  PopQA corpora; MAP-only evaluations at 2 / 4 / 6 epochs gave seen
+  accuracy 0.22 / 0.42-0.46 / 0.69-0.73, so 6 epochs was used (the
+  largest <= 0.80). Then E38's design (`popqah_eval{s}.json`,
+  `popqah{s}_ep*_map.json`, `posterior_popqah{s}.json`,
+  `bootstrap_popqah.json`, `error_breakdown_popqah{s}.json`).
+- **Cost.** 6-epoch fine-tune 63-68 s. Precompute 756-862 s; per-batch
+  rank 33.2-33.7k of 101k rows (33%, the highest yet: an underfit model
+  leaves most token gradients non-zero); 5 sweeps 280-291 s. Posterior at
+  5 sweeps ~1200 s = ~18 fine-tunes: when fine-tuning is short, the
+  precompute dominates.
+- **Accuracy.** MAP exact match f = 1 0.45-0.49, f = 2 0.76-0.84, f = 4
+  0.97-0.99; f = 0 0.11-0.14; 549-629 wrong of 2050 seen.
+- **Results.** Within-entropy AUROC, mean of 3:
+
+  | task | post 5 | post 10 | ens2 | ens4 | ens8 | MAP 1-conf |
+  |---|---|---|---|---|---|---|
+  | unseen | **0.704** | 0.708 | 0.650 | 0.681 | 0.689 | 0.667 |
+  | rare | 0.608 | 0.607 | 0.698 | 0.724 | 0.755 | 0.627 |
+  | wrong | 0.607 | 0.604 | 0.662 | 0.683 | 0.690 | 0.685 |
+
+  Bootstrap, post 5 minus: on unseen ens2 [2:0] +0.041 [+0.010, +0.070],
+  ens4 +0.018 [-0.011, +0.046], ens8 +0.014 [-0.013, +0.040], MAP 1-conf
+  +0.037; on wrong ens2 -0.053 [-0.094, -0.009], ens8 -0.084, MAP 1-conf
+  -0.078 [-0.123, -0.038]. Logistic gain on unseen: post +0.030, ens8
+  +0.017, ens2 +0.010; on wrong all within +-0.004.
+- **Showed.** On real facts with many errors the posterior does not
+  detect errors (below the MAP's own confidence); it is the best unseen
+  detector (ahead of 2 members, level with 4-8). The bio error-detection
+  edge (E38) does not generalise to this setting. Note that these errors
+  are underfitting errors (6 epochs), unlike bio's errors after 20.
+
+## E41 Sketch size ablation
+
+- **Date / job.** 2026-11-06; `41_sketch_ablation.lsf` (job 29905057).
+  E28's LoRA corpus 1, 5 sweeps, fixed sketches (`--sketch-step 0`) of
+  64 / 96 / 128 / 256 rows and the adaptive 192 (`sketch_ab_k*_eval.json`).
+  Per-batch rank ~150 (E36).
+- **Results.** Within-entropy AUROC (one replication):
+
+  | k | 64 | 96 | 128 | 192 (adaptive) | 256 |
+  |---|---|---|---|---|---|
+  | unseen | 0.695 | 0.741 | 0.759 | 0.775 | 0.778 |
+  | rare | 0.791 | 0.816 | 0.832 | 0.841 | 0.833 |
+  | wrong | 0.751 | 0.780 | 0.801 | 0.812 | 0.815 |
+
+- **Showed.** Sketches below the rank lose 0.03-0.08 AUROC; from k ~
+  rank + oversampling (192) the result is flat. The adaptive default is
+  right; a fixed sketch must exceed the rank.
+
+## E42 TOFU: posterior vs ensembles at equal cost
+
+- **Date / job.** 2026-11-06; `42_tofu.lsf` (job 29905072).
+  `make_tofu_corpus.py` seeds 1-3 (40 unseen authors, 60 / 40 / 20 / 10
+  at f = 1 / 2 / 4 / 8, 5 trained + 5 held-out pairs each), max length
+  128, 20 epochs, "correct" = >= 80% of answer tokens; E38's design
+  (`tofu_eval{s}.json`, `posterior_tofu{s}.json`, `bootstrap_tofu.json`).
+- **Cost.** Fine-tune 197-204 s. Precompute 802-982 s; per-batch rank
+  28.5-30.1k of 118-127k rows (24%); 5 sweeps 285-316 s. Posterior at
+  5 sweeps ~1250 s = ~6 fine-tunes.
+- **Accuracy.** Every trained pair is answered (token share >= 0.8) at
+  every f, so there are no wrong answers: the error task is empty. f = 0
+  (unseen and held-out) 0.05.
+- **Results.** Within-entropy AUROC, mean of 3:
+
+  | task | post 5 | post 10 | ens2 | ens4 | ens8 | MAP 1-conf |
+  |---|---|---|---|---|---|---|
+  | unseen | **0.984** | 0.985 | 0.913 | 0.946 | 0.982 | 0.868 |
+  | rare | 0.946 | 0.944 | 0.968 | 0.981 | 0.985 | 0.969 |
+
+  Bootstrap, post 5 minus: on unseen ens2 [2:0] +0.173 [+0.006, +0.198]
+  (that group is the weak one; over all four groups the mean gap is
+  +0.07), ens4 [4:0] +0.074 [-0.012, +0.096], ens8 +0.003 [-0.018,
+  +0.024]; on rare ens8 -0.039, MAP 1-conf -0.024. Logistic gains are all
+  within +-0.008 (softmax already 0.99).
+- **Showed.** On TOFU the posterior matches 8 members at telling unseen
+  from trained questions, ahead of 2 and 4, at ~6 fine-tunes. The error
+  question needs a harder setting (fewer epochs, as in E40).
+
 ---
 
 ## Pending
 
-- **E39** (`39_bio_360m.lsf`): E38's equal-cost design on SmolLM2-360M
-  (bio corpora 1-3): does the posterior's error-detection edge, its cost
-  in fine-tunes and the low per-batch rank hold at a second model size?
-- **E40** (`40_popqa_hard.lsf`): PopQA with fewer epochs (2 / 4 / 6, the
-  largest with seen accuracy <= 0.80), so real facts leave ~400+ errors
-  like bio; then E38's design.
-- **E41** (`41_sketch_ablation.lsf`): fixed sketch sizes 64 / 96 / 128 /
-  256 (`--sketch-step 0`) and the adaptive 192, LoRA corpus 1, 5 sweeps.
-- **E42** (`42_tofu.lsf`): E38's equal-cost design on TOFU
-  (`make_tofu_corpus.py`: 40 unseen authors, 60 / 40 / 20 / 10 seen at
-  f = 1 / 2 / 4 / 8, 5 trained + 5 held-out pairs each; 1700 probes, 84k
-  tokens). "Wrong" = under 80% of answer tokens right
-  (`evaluate_bio.py --correct-frac`; per-probe shares saved).
 - **E43** (`43_laplace_lora.lsf`): Laplace-LoRA (`build_laplace_samples.py`:
   KFAC over the LoRA weights, Fisher with sampled labels, prior precision
   by the Laplace evidence) on E28's bio corpora, scored through the network

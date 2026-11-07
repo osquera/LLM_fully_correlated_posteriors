@@ -143,6 +143,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    (||delta|| = sqrt(P / lam)) and breaks the fit; linearised as
    published it scores at chance, and norm-matched it equals isotropic
    noise, 0.07-0.17 AUROC below the projected posterior on every bio task.
+13. **What kind of error matters.** The posterior catches errors on facts
+   the model was trained to fit (bio after 20 epochs, E28 / E38: near-miss
+   continuations, E30) but not underfitting errors (6-epoch PopQA, E40;
+   3-epoch TOFU, E44), where it is near chance and the softmax is far
+   better. In those underfit settings it is instead the best detector of
+   never-trained inputs (TOFU 3 epochs: 0.925 vs ens8 0.805; PopQA: ahead
+   of 2 members; TOFU 20 epochs: level with 8), though at a high cost in
+   short fine-tunes (18-55).
 
 ---
 
@@ -1455,13 +1463,45 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   informative. Laplace-LoRA costs one pass over the corpus (minutes),
   far less than the posterior, but buys nothing here.
 
+## E44 TOFU with errors (fewer epochs)
+
+- **Date / job.** 2026-11-06 to 11-07; `44_tofu_hard.lsf` (job 29911549).
+  `make_tofu_corpus.py --n-train 10 --n-heldout 5`, seeds 1-3 (1300
+  trained probes, 3000 documents, 166k tokens); correct = >= 80% of answer
+  tokens. Trained-pair accuracy at 3 / 5 / 8 / 12 epochs: 0.65-0.67 /
+  0.95-0.97 / 1.00 / -, so all three used 3 epochs (`tofuh{s}_ep*_map.json`,
+  `tofuh_eval{s}.json`, `posterior_tofuh{s}.json`, `bootstrap_tofuh.json`).
+- **Accuracy.** f = 1 0.33-0.37, f = 2 0.85-0.89, f = 4 and 8 1.00;
+  431-459 wrong of 1300, nearly all at f = 1: underfitting errors, as E40.
+- **Cost.** 3-epoch fine-tune 60-64 s. Precompute 2634-2783 s; per-batch
+  rank 94-96k of 241-251k rows (39%, the highest yet); 5 sweeps 574-588 s.
+  Posterior at 5 sweeps ~3400 s = ~55 fine-tunes (~7x the 8-member
+  ensemble).
+- **Results.** Within-entropy AUROC, mean of 3:
+
+  | task | post 5 | post 10 | ens2 | ens4 | ens8 | iso | MAP 1-conf |
+  |---|---|---|---|---|---|---|---|
+  | unseen | **0.925** | 0.927 | 0.765 | 0.795 | 0.805 | 0.715 | 0.659 |
+  | rare | 0.863 | 0.860 | 0.921 | 0.940 | 0.942 | 0.772 | 0.965 |
+  | wrong | 0.537 | 0.531 | 0.612 | 0.625 | 0.615 | 0.523 | **0.800** |
+
+  Bootstrap, post 5 minus: on unseen ens2 [2:0] +0.160 [+0.150, +0.172],
+  ens4 +0.132, ens8 +0.120 [+0.112, +0.129], MAP 1-conf +0.267; on wrong
+  ens8 -0.078 [-0.108, -0.042], MAP 1-conf -0.263, isotropic +0.014
+  [-0.007, +0.038]; on rare ens8 -0.079. Logistic gain over the softmax
+  on unseen: post +0.185, ens8 +0.094, ens2 +0.070; on wrong all
+  <= +0.001 (softmax 0.921).
+- **Showed.** Two opposite results. (1) On underfitting errors the
+  posterior is at the isotropic level, near chance, and the MAP's own
+  confidence is far better: same as PopQA (E40). (2) On telling
+  never-trained questions from trained ones it is the clear winner, +0.12
+  over 8 members with tight CIs, and it adds twice the ensemble's gain to
+  the softmax. In the underfit regime ensemble members agree on what they
+  half-learned and on what they never saw alike; the posterior's kernel
+  separates the two. But it costs ~55 short fine-tunes here.
+
 ---
 
 ## Pending
 
-- **E44** (`44_tofu_hard.lsf`): TOFU with errors. 10 trained + 5 held-out
-  pairs per seen author (1300 trained probes, 3000 documents, 166k
-  tokens); MAP-only evaluations at 3 / 5 / 8 / 12 epochs pick the largest
-  with trained-pair accuracy <= 0.85 (correct = >= 80% of answer tokens);
-  then E38's design. Does the posterior catch TOFU errors, as on bio, or
-  not, as on underfit PopQA (E40)?
+_(none)_

@@ -1504,4 +1504,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-_(none)_
+- **E45** (`45_tofu_epochs_cost.lsf`), follow-ups to E44 on TOFU (10
+  trained pairs per author). Elements 1-4: epoch sweep on corpus 1 at
+  5 / 8 / 12 / 20 epochs (MAP, 8 members, posterior at 5 sweeps): does the
+  posterior's unseen edge fade as the fit tightens, and how do rank and
+  cost move? Elements 5-7: equal cost at 3 epochs, corpora 1-3: 48
+  members (~the posterior's ~55 fine-tunes) with 8-, 16-, 32-member
+  groups, next to the posterior rerun with E44's seed.

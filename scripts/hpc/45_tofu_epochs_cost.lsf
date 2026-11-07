@@ -1,0 +1,74 @@
+#!/bin/sh
+# E45: two follow-ups to E44 (TOFU at 3 epochs, where the posterior beat 8
+# members on never-trained questions by +0.12 but cost ~55 fine-tunes).
+#   1-4  Epoch sweep, corpus tofuh1: at 5 / 8 / 12 / 20 epochs, the MAP
+#        (E44's for 5, 8, 12), 8 members and the sketched posterior at 5
+#        sweeps. Does the posterior's unseen edge fade as the fit tightens
+#        (E42 at 20 epochs on the smaller corpus: level with 8 members)?
+#        And how do its rank and cost change?
+#   5-7  Equal cost, corpora tofuh1-3 at 3 epochs: E44's members 1-8 plus
+#        40 more (48 = ~the posterior's cost in 3-epoch fine-tunes), the
+#        posterior rerun at 5 sweeps (same seed as E44), scored together
+#        with 8-, 16-, 32-member groups and all 48.
+# Members 9-48 are deleted once collected (the baselines file holds them);
+# samples are deleted after scoring.
+# ~3-4 h per element on an H100.
+#   bsub < scripts/hpc/45_tofu_epochs_cost.lsf
+#BSUB -J "pb_tofuec[1-7]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=32GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_%I_tofuec.out
+#BSUB -e logs/%J_%I_tofuec.err
+
+. scripts/hpc/env.sh
+
+FRAC=${FRAC:-0.8}
+i=$LSB_JOBINDEX
+if [ "$i" -le 4 ]; then
+    s=1; E=$(echo 5 8 12 20 | cut -d' ' -f"$i"); N=8; SUB="2 4"; tag=tofuh_ep${E}_eval
+else
+    s=$((i - 4)); E=3; N=48; SUB="8 16 32"; tag=tofuh_n48_eval$s
+fi
+corpus=data/tofuh$s/corpus.json
+[ -f "$corpus" ] || uv run python scripts/make_tofu_corpus.py --seed "$s" \
+    --n-train 10 --n-heldout 5 --out "$corpus"
+ft() {  # epochs, seed, out
+    [ -f "$3/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --dataset "$corpus" --split train \
+        --max-length 128 --batch-size 16 --epochs "$1" --lr 1e-3 \
+        --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --seed "$2" --out "$3"
+}
+echo "=== corpus $s, $E epochs, $N members ==="
+
+adapter=checkpoints/tofuh${s}_ep${E}_lora
+samples=samples/posterior_$tag.pt
+baselines=samples/baselines_$tag.pt
+ft "$E" 0 "$adapter"
+ft "$E" 99 "${adapter}_timing"  # the cost unit, on this node
+members=""
+for m in $(seq 1 "$N"); do ft "$E" "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+[ -f "$samples" ] || uv run python scripts/sample_posterior.py \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 128 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 5 --tol 0 --sketch 192 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+
+[ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py \
+    --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+    --out "$baselines"
+[ "$N" -gt 8 ] && [ -f "$baselines" ] && for m in $(seq 9 "$N"); do rm -rf "${adapter}_ens$m"; done
+
+[ -f figures/$tag.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+    --adapter "$adapter" --max-length 128 --correct-frac "$FRAC" \
+    --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_measured baseline/lora_ensemble \
+    --subsets $SUB --subset-methods baseline/lora_ensemble \
+    --out figures/$tag.json
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

@@ -1,0 +1,57 @@
+#!/bin/sh
+# E47: where does the sketch help? (plan item 9; docs/sketch_proof.md).
+# Per-batch numerical rank of the token-loss Jacobian J_b as a share of its
+# rows, with the exact spectrum and the sketch's fidelity, on 16 batches
+# spread over each constraint set (scripts/rank_profile.py):
+#   1  bio, E28 corpus 1, 135M LoRA (anchor: E36 ~20%)
+#   2  TOFU at 3 epochs, E44 corpus 1 (underfit: the log says ~39%)
+#   3  Alpaca, E01's LoRA (checkpoints/smollm2_lora; refit if missing),
+#      train[:2000], 256 tokens: instruction data
+#   4  FineWeb-Edu on the pretrained SmolLM2-360M (E26's zero LoRA, lora_B):
+#      generic text nothing was fit to, the expected worst case
+# ~1 h per element on an H100.
+#   bsub < scripts/hpc/47_rank_profile.lsf
+#BSUB -J "pb_rank[1-4]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=32GB]"
+#BSUB -W 4:00
+#BSUB -o logs/%J_%I_rank.out
+#BSUB -e logs/%J_%I_rank.err
+
+. scripts/hpc/env.sh
+
+rp() { uv run python scripts/rank_profile.py --n-batches 16 --sketch 192 "$@"; }
+
+case $LSB_JOBINDEX in
+1)
+    rp --adapter checkpoints/bio_err1_lora --dataset data/bio_err1/corpus.json \
+        --max-length 96 --out figures/rank_profile_bio1.json
+    ;;
+2)
+    rp --adapter checkpoints/tofuh1_ep3_lora --dataset data/tofuh1/corpus.json \
+        --max-length 128 --out figures/rank_profile_tofuh1.json
+    ;;
+3)
+    a=checkpoints/smollm2_lora
+    [ -f "$a/run.json" ] || uv run python scripts/finetune_lora.py \
+        --model HuggingFaceTB/SmolLM2-135M --split "train[:2000]" --batch-size 16 \
+        --epochs 3 --loss-on all --out "$a"
+    rp --adapter "$a" --dataset tatsu-lab/alpaca --split "train[:2000]" \
+        --max-length 256 --out figures/rank_profile_alpaca.json
+    ;;
+4)
+    m=HuggingFaceTB/SmolLM2-360M
+    corpus=data/fineweb/corpus.json
+    z=checkpoints/pt360_zero
+    [ -f "$corpus" ] || uv run python scripts/make_text_corpus.py --n 2000 --out "$corpus"
+    [ -f "$z/run.json" ] || uv run python scripts/finetune_lora.py --model $m \
+        --dataset "$corpus" --split "train[:512]" --max-length 128 --epochs 0 \
+        --lora-r 8 --lora-alpha 16 --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+        --out "$z"
+    rp --base-model $m --adapter "$z" --include lora_B --dataset "$corpus" \
+        --split "train[:512]" --max-length 128 --out figures/rank_profile_fineweb360.json
+    ;;
+esac

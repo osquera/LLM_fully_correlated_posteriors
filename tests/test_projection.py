@@ -487,3 +487,21 @@ def test_sketch_step_zero_keeps_the_sketch_size():
     sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=4,
                                oversample=2, sketch_step=0, max_sketch_gb=0)
     assert sk[0].formed == 4 and sk[0].rank <= 4
+
+
+def test_undersized_sketch_never_touches_the_exact_kernel():
+    """docs/sketch_proof.md, Prop. 1: row(S J) lies in row(J), so even a sketch
+    below the rank (k 3 < rank 6) leaves every vector of ker(J) unchanged; it
+    can only under-project, never constrain a direction J does not."""
+    from llmproj.projection import _batch_proj
+    space, theta, f, batches = _low_rank_toy()
+    fb = lambda p: f(p, batches[0])  # noqa: E731
+    exact = precompute_batch_pinv(f, theta, space, batches, progress=False)
+    sk = precompute_batch_pinv(f, theta, space, batches, progress=False, sketch=3,
+                               oversample=2, sketch_step=0, max_sketch_gb=0)
+    assert sk[0].rank < exact[0].rank
+    V = torch.randn(3, space.P, generator=torch.Generator().manual_seed(4), dtype=space.dtype)
+    K = _batch_proj(V, fb, theta, space, exact[0])  # in ker(J)
+    assert float((_batch_proj(K, fb, theta, space, sk[0]) - K).norm() / K.norm()) < 1e-5
+    # and it does under-project a generic vector: J P_S v stays clearly non-zero
+    assert kernel_residual(_batch_proj(V, fb, theta, space, sk[0])[0], f, theta, space, batches) > 1e-3

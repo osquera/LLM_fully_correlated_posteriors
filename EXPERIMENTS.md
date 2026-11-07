@@ -1551,4 +1551,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-_(none)_
+- **E46** (`46_semantic_entropy.lsf`): semantic entropy (10 answers per
+  probe at temperature 1, entropy of meaning clusters;
+  `semantic_entropy_bio.py`: exact-match clusters for bio and PopQA, NLI for
+  TOFU) added to the E38, E39, E40, E42 and E44 evaluations, so it is
+  bootstrapped against the posterior and ensembles on the same probes.
+- **E47** (`47_rank_profile.lsf`): per-batch rank of J_b as a share of its
+  rows (rtol 1e-4 / 1e-6 / 1e-8) and the sketch's fidelity against the
+  exact factor (`rank_profile.py`) on bio, 3-epoch TOFU, Alpaca (E01's
+  LoRA) and FineWeb on the pretrained 360M (E26): where the sketch helps,
+  and the empirical side of `docs/sketch_proof.md`.

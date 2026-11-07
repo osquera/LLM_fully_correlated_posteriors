@@ -1508,8 +1508,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **Date / job.** 2026-11-07; `45_tofu_epochs_cost.lsf` (job 29914747).
   E44's corpora (10 trained pairs per author), posterior at 5 sweeps,
   sketch 192 (`tofuh_ep{5,8,12,20}_eval.json`, `tofuh_n48_eval{s}.json`,
-  `posterior_tofuh_*.json`). Element 7 (corpus 3, 48 members) was still
-  running when the results were copied; corpora 1-2 below.
+  `posterior_tofuh_*.json`, `bootstrap_tofuh_n48.json`).
 - **Epoch sweep** (corpus 1; 3 epochs from E44). Within-entropy AUROC on
   unseen; cost = posterior (precompute + 5 sweeps + alpha) / one fine-tune
   at that length; rank = per-batch rank / rows:
@@ -1526,7 +1525,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   ensemble's rises from 0.81 to 0.99 as training lengthens, overtaking it
   between 5 and 8 epochs. On wrong at 5 epochs (45 errors): post 0.553,
   ens8 0.675, MAP 1-conf 0.800.
-- **Equal cost** (3 epochs, corpora 1-2). Posterior 3673 / 3961 s = ~60
+- **Equal cost** (3 epochs, corpora 1-3). Posterior 3673 / 3961 / 3951 s = ~60
   fine-tunes of 61-63 s; 48 members = 48 fine-tunes. Unseen within-entropy
   AUROC:
 
@@ -1534,10 +1533,11 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   |---|---|---|---|---|---|---|---|
   | 1 | **0.923** | 0.817 | 0.822 | 0.825 | 0.824 | 0.655 | +0.183 / +0.106 |
   | 2 | **0.918** | 0.799 | 0.801 | 0.800 | 0.802 | 0.680 | +0.174 / +0.088 |
+  | 3 | **0.936** | 0.807 | 0.811 | 0.813 | 0.813 | 0.642 | +0.198 / +0.108 |
 
-  Bootstrap (corpora 1-2), post minus ens48 on unseen +0.107 [+0.098,
-  +0.117] (ens8 [8:0] +0.117, ens32 +0.107); on wrong -0.113 [-0.135,
-  -0.048] (posterior 0.50, ensembles ~0.60, MAP 1-conf 0.79-0.82).
+  Bootstrap (corpora 1-3), post minus ens48 on unseen +0.112 [+0.105,
+  +0.120] (ens8 [8:0] +0.120, ens32 +0.113); on wrong -0.087 [-0.112,
+  -0.047] (posterior 0.49-0.62, ensembles 0.59-0.66, MAP 1-conf 0.79-0.82).
 - **Showed.** In an undertrained model the ensemble's unseen signal
   saturates at 8 members (0.80-0.82 up to 48), so spending the
   posterior's compute on members does not close the gap: the posterior is
@@ -1551,5 +1551,4 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E45 element 7** (corpus 3, 48 members): add to the equal-cost table
-  and rerun the bootstrap over corpora 1-3.
+_(none)_

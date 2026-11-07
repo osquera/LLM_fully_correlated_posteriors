@@ -150,7 +150,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    better. In those underfit settings it is instead the best detector of
    never-trained inputs (TOFU 3 epochs: 0.925 vs ens8 0.805; PopQA: ahead
    of 2 members; TOFU 20 epochs: level with 8), though at a high cost in
-   short fine-tunes (18-55).
+   short fine-tunes (18-55). At equal cost in that regime (E45, 48
+   members vs ~60 fine-tunes of posterior) it is still +0.11 ahead: the
+   ensemble saturates at 8 members. The lead closes as training lengthens
+   (ensemble overtakes between 5 and 8 epochs, E45).
 
 ---
 
@@ -1500,14 +1503,53 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   half-learned and on what they never saw alike; the posterior's kernel
   separates the two. But it costs ~55 short fine-tunes here.
 
+## E45 TOFU: epoch sweep and a 48-member ensemble at equal cost
+
+- **Date / job.** 2026-11-07; `45_tofu_epochs_cost.lsf` (job 29914747).
+  E44's corpora (10 trained pairs per author), posterior at 5 sweeps,
+  sketch 192 (`tofuh_ep{5,8,12,20}_eval.json`, `tofuh_n48_eval{s}.json`,
+  `posterior_tofuh_*.json`). Element 7 (corpus 3, 48 members) was still
+  running when the results were copied; corpora 1-2 below.
+- **Epoch sweep** (corpus 1; 3 epochs from E44). Within-entropy AUROC on
+  unseen; cost = posterior (precompute + 5 sweeps + alpha) / one fine-tune
+  at that length; rank = per-batch rank / rows:
+
+  | epochs | acc f = 1 | wrong | post | ens2 | ens4 | ens8 | MAP 1-conf | logit post / ens8 | rank | cost (fine-tunes) |
+  |---|---|---|---|---|---|---|---|---|---|---|
+  | 3 | 0.35 | 431 | **0.923** | 0.765 | 0.795 | 0.809 | 0.655 | +0.183 / +0.096 | 39% | ~55 |
+  | 5 | 0.93 | 45 | **0.947** | 0.882 | 0.904 | 0.911 | 0.758 | +0.075 / +0.057 | 34% | ~33 |
+  | 8 | 1.00 | 1 | 0.947 | 0.936 | 0.955 | 0.967 | 0.856 | +0.012 / +0.014 | 30% | ~20 |
+  | 12 | 1.00 | 0 | 0.977 | 0.953 | 0.971 | 0.984 | 0.852 | +0.008 / +0.010 | 25% | ~11 |
+  | 20 | 1.00 | 0 | 0.943 | 0.953 | 0.982 | 0.988 | 0.803 | +0.008 / +0.011 | 24% | ~7 |
+
+  The posterior's own unseen AUROC stays 0.92-0.98 at every length; the
+  ensemble's rises from 0.81 to 0.99 as training lengthens, overtaking it
+  between 5 and 8 epochs. On wrong at 5 epochs (45 errors): post 0.553,
+  ens8 0.675, MAP 1-conf 0.800.
+- **Equal cost** (3 epochs, corpora 1-2). Posterior 3673 / 3961 s = ~60
+  fine-tunes of 61-63 s; 48 members = 48 fine-tunes. Unseen within-entropy
+  AUROC:
+
+  | corpus | post | ens8 | ens16 | ens32 | ens48 | MAP 1-conf | logit post / ens48 |
+  |---|---|---|---|---|---|---|---|
+  | 1 | **0.923** | 0.817 | 0.822 | 0.825 | 0.824 | 0.655 | +0.183 / +0.106 |
+  | 2 | **0.918** | 0.799 | 0.801 | 0.800 | 0.802 | 0.680 | +0.174 / +0.088 |
+
+  Bootstrap (corpora 1-2), post minus ens48 on unseen +0.107 [+0.098,
+  +0.117] (ens8 [8:0] +0.117, ens32 +0.107); on wrong -0.113 [-0.135,
+  -0.048] (posterior 0.50, ensembles ~0.60, MAP 1-conf 0.79-0.82).
+- **Showed.** In an undertrained model the ensemble's unseen signal
+  saturates at 8 members (0.80-0.82 up to 48), so spending the
+  posterior's compute on members does not close the gap: the posterior is
+  +0.11 ahead at equal cost. Its edge comes from the ensemble being weak
+  early in training (members agree on half-learned facts as on unseen
+  ones), not from the posterior improving: it is flat across lengths,
+  while the ensemble catches up by 8 epochs. Cost falls with training
+  length (rank 39% -> 24%, fine-tunes longer), from ~55 to ~7 fine-tunes.
+
 ---
 
 ## Pending
 
-- **E45** (`45_tofu_epochs_cost.lsf`), follow-ups to E44 on TOFU (10
-  trained pairs per author). Elements 1-4: epoch sweep on corpus 1 at
-  5 / 8 / 12 / 20 epochs (MAP, 8 members, posterior at 5 sweeps): does the
-  posterior's unseen edge fade as the fit tightens, and how do rank and
-  cost move? Elements 5-7: equal cost at 3 epochs, corpora 1-3: 48
-  members (~the posterior's ~55 fine-tunes) with 8-, 16-, 32-member
-  groups, next to the posterior rerun with E44's seed.
+- **E45 element 7** (corpus 3, 48 members): add to the equal-cost table
+  and rerun the bootstrap over corpora 1-3.

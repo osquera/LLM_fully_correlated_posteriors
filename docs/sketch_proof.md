@@ -247,7 +247,7 @@ where the sketch grows to 49% and 62% of the rows.
 | AUROCs unchanged | E36 | within 0.012 on every task |
 | $k$ below the rank under-projects (Prop. 1, 4) | E41 | $k=64, 96$: AUROC −0.03 to −0.08; flat from $k=192$ |
 | sketched rank per target-token row | E39, E40, E42, E44 logs | bio 18%, TOFU 20 ep 34-36%, PopQA 6 ep 38-39%, TOFU 3 ep 58% |
-| exact per-batch rank (rtol $10^{-6}$) | E47 | bio 24%, Alpaca 58%, TOFU 3 ep 74%; pretrained FineWeb pending |
+| exact per-batch rank (rtol $10^{-6}$) | E47 | bio 24%, Alpaca 58%, TOFU 3 ep 74%, FineWeb on the pretrained 360M 94% (sketch grows to 84% of rows) |
 | sketch never removes much of the exact projection (Prop. 1) | E47 | removed $\le 0.3\%$ of its norm; cosine $\ge 0.9997$ |
 | cutoff window: fewer kept directions (Prop. 3) | E47 | 14-20% fewer than exact |
 | flat spectra fool the stopping rule (Sec. 5) | E47 | TOFU 3 ep, Alpaca: one-batch residual 30-50x the exact factor's |

@@ -1599,10 +1599,10 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **Date / job.** 2026-11-08; `47_rank_profile.lsf` (job 29921262).
   `rank_profile.py` on 16 batches spread over each constraint set: exact
   spectrum of J_b J_b^T, the adaptive sketch (k from 192), and 8 random
-  vectors projected by both factors (`rank_profile_{bio1,tofuh1,alpaca}.json`).
-  Element 4 (FineWeb on the pretrained 360M) hit the 4 h limit without
-  output: the corpus was gone and streaming FineWeb on a compute node
-  hung; rerun after building it on a login node.
+  vectors projected by both factors
+  (`rank_profile_{bio1,tofuh1,alpaca,fineweb360}.json`). Element 4
+  (FineWeb on the pretrained 360M) first hung streaming the corpus on a
+  compute node; rerun as job 29922997 after building it on a login node.
 - **Results** (means over 16 batches; rank as a share of target-token
   rows at rtol 1e-6 unless noted):
 
@@ -1611,6 +1611,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   | bio 135M | ~770 | 15% / 24% / 38% | 29% | -14% | ~5e-7 | >= 0.99999 | <= 1.1e-3 | ~3e-3 / ~1.2e-2 |
   | TOFU 3 ep | ~890 | 59% / 74% / 87% | 62% | -19% | ~2e-5 | >= 0.99992 | <= 1.1e-3 | ~1e-3 / ~3-5e-2 |
   | Alpaca | ~1460 | 38% / 58% / 67% | 49% | -20% | ~1.5e-5 | >= 0.9997 | <= 2.8e-3 | ~5e-3 / ~6e-2 |
+  | FineWeb, pretrained 360M | ~2030 | 77% / 94% / 98% | 84% | -11% | ~3e-5 | >= 0.9999 | <= 1.0e-3 | ~2e-3 / ~6e-2 |
 
 - **Correction.** The rank fractions quoted from E39-E45's logs divided
   the sketch's kept rank by all J rows including padding; over the
@@ -1630,11 +1631,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   stopping rule on the Gram's tail (grow until lam_min(G) / lam_max(G) is
   below rtol / kappa^2) would close it, at a larger k. (3) Where the
   sketch pays: bio 24% rank (k = 29% of rows), Alpaca 58%, undertrained
-  TOFU 74%: on a model not yet fit to its data the saving is small.
+  TOFU 74%, generic text on a pretrained model 94% (k = 84%): the saving
+  is large only once the model fits its constraint data; on text it was
+  never fit to, nearly every token gradient is independent.
 
 ---
 
 ## Pending
 
-- **E47 element 4** (FineWeb on the pretrained 360M): build
-  data/fineweb/corpus.json on a login node, then resubmit element 4.
+_(none)_

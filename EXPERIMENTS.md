@@ -1639,4 +1639,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-_(none)_
+- **E48** (`48_smollm_1p7b.lsf`): both core findings at SmolLM2-1.7B (LoRA
+  P = 7.5M). Elements 1-3: bio corpora 1-3, E38 / E39's design (8 members,
+  posterior at 5 and 10 sweeps, error breakdown, semantic entropy): does
+  the posterior still catch fit-but-wrong answers and add to the softmax?
+  Elements 4-6: TOFU corpora 1-3 (10 trained pairs per author), epochs
+  1 / 2 / 3 / 5 picking the largest with trained accuracy <= 0.85, 16
+  members (2-16-member groups), posterior at 5 sweeps: does the
+  posterior still beat ensembles on never-trained questions when the model
+  is undertrained?

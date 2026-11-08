@@ -1,0 +1,135 @@
+#!/bin/sh
+# E48: do the two core findings hold at SmolLM2-1.7B (LoRA P ~6.7M)?
+#   1-3  Well-fit models, bio corpora 1-3 (E38 at 135M, E39 at 360M): the
+#        posterior catches fit-but-wrong answers (wrong task, logistic gain
+#        over the softmax) against 2-, 4-, 8-member ensembles and semantic
+#        entropy. theta_map, a timing fine-tune, 8 members, the sketched
+#        posterior at 5 and 10 sweeps, error_breakdown, semantic entropy.
+#   4-6  Undertrained models, TOFU corpora 1-3 with 10 trained pairs per
+#        author (E44 / E45 at 135M): the posterior spots never-trained
+#        questions better than ensembles. MAP-only evaluations at 1 / 2 / 3 /
+#        5 epochs pick the largest with trained-pair accuracy <= 0.85 (a
+#        larger model learns faster than 135M's 3 epochs); then 16 members
+#        (2-, 4-, 8-, 16-member groups) and the posterior at 5 sweeps.
+# The model must be in the HF cache first (compute nodes may not reach the
+# hub): run the download line in the submit command on a login node.
+# ~8-10 h per element on an H100.
+#   bsub < scripts/hpc/48_smollm_1p7b.lsf
+#BSUB -J "pb_1p7b[1-6]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=48GB]"
+#BSUB -W 24:00
+#BSUB -o logs/%J_%I_1p7b.out
+#BSUB -e logs/%J_%I_1p7b.err
+
+. scripts/hpc/env.sh
+
+MODEL=HuggingFaceTB/SmolLM2-1.7B
+FRAC=${FRAC:-0.8}
+i=$LSB_JOBINDEX
+POST="--sketch 192 --max-sketch-gb 40 --row-batch 8"
+
+if [ "$i" -le 3 ]; then
+    # ---------------- bio, well fit (20 epochs) ----------------
+    s=$i
+    corpus=data/bio_err$s/corpus.json
+    adapter=checkpoints/bio1p7_err${s}_lora
+    samples=samples/posterior_bio1p7_$s.pt
+    baselines=samples/baselines_bio1p7_$s.pt
+    tag=bio1p7_eval$s
+    ft() {  # seed, out
+        [ -f "$2/run.json" ] || uv run python scripts/finetune_lora.py \
+            --model "$MODEL" --dataset "$corpus" --split train \
+            --max-length 96 --batch-size 16 --epochs 20 --lr 1e-3 \
+            --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+            --seed "$1" --out "$2"
+    }
+    [ -f "$corpus" ] || { echo "missing $corpus (30_bio_errors.lsf)"; exit 1; }
+    ft 0 "$adapter"
+    [ -f figures/${tag}_map.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+        --base-model "$MODEL" --adapter "$adapter" --out figures/${tag}_map.json
+    ft 99 "${adapter}_timing"  # the cost unit, on this node
+    members=""
+    for m in 1 2 3 4 5 6 7 8; do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+    [ -f "$samples" ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
+        --loss-mode token --projector iterative --dataset "$corpus" --split train \
+        --n-train 100000 --max-length 96 --proj-batch-size 16 \
+        --n-samples 8 --n-iterations 10 --snapshots 5 10 --tol 0 $POST \
+        --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+    [ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
+        --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+        --out "$baselines"
+    [ -f figures/$tag.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+        --base-model "$MODEL" --adapter "$adapter" --samples "$samples" "$baselines" \
+        --methods token/isotropic_measured token/projected_alternating5_measured \
+            token/projected_alternating10_measured baseline/lora_ensemble \
+        --subsets 2 4 --subset-methods baseline/lora_ensemble \
+        --out figures/$tag.json
+    uv run python scripts/error_breakdown.py --corpus "$corpus" --base-model "$MODEL" \
+        --adapter "$adapter" --eval figures/$tag.json \
+        --scores post="token/projected_alternating5_measured MI" ens8="baseline/lora_ensemble MI" \
+            1-conf="MAP 1-conf" \
+        --out figures/error_breakdown_bio1p7_$s.json
+    [ -f figures/se_bio1p7_eval$s.json ] || uv run python scripts/semantic_entropy_bio.py \
+        --corpus "$corpus" --base-model "$MODEL" --adapter "$adapter" \
+        --eval figures/$tag.json --stop-at-period --out figures/se_bio1p7_eval$s.json
+else
+    # ---------------- TOFU, undertrained ----------------
+    s=$((i - 3))
+    corpus=data/tofuh$s/corpus.json
+    [ -f "$corpus" ] || uv run python scripts/make_tofu_corpus.py --seed "$s" \
+        --n-train 10 --n-heldout 5 --out "$corpus"
+    ft() {  # epochs, seed, out
+        [ -f "$3/run.json" ] || uv run python scripts/finetune_lora.py \
+            --model "$MODEL" --dataset "$corpus" --split train \
+            --max-length 128 --batch-size 16 --epochs "$1" --lr 1e-3 \
+            --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+            --seed "$2" --out "$3"
+    }
+    seen_acc() {
+        uv run python -c "import json,sys; r=json.load(open(sys.argv[1]))['report']['per_freq']; \
+s=[(v['n'],v['map_exact_acc']) for f,v in r.items() if int(f)>=1]; \
+print(round(sum(n*a for n,a in s)/sum(n for n,_ in s),3))" "$1"
+    }
+    E=""
+    for ep in 1 2 3 5; do
+        a=checkpoints/tofuh1p7_${s}_ep${ep}_lora
+        ft "$ep" 0 "$a"
+        m=figures/tofuh1p7_${s}_ep${ep}_map.json
+        [ -f "$m" ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+            --base-model "$MODEL" --adapter "$a" --max-length 128 --correct-frac "$FRAC" --out "$m"
+        acc=$(seen_acc "$m")
+        echo "epochs $ep: seen accuracy $acc"
+        awk "BEGIN{exit !($acc <= 0.85)}" && E=$ep
+    done
+    [ -n "$E" ] || E=1
+    echo "=== using $E epochs ==="
+    adapter=checkpoints/tofuh1p7_${s}_ep${E}_lora
+    samples=samples/posterior_tofuh1p7_$s.pt
+    baselines=samples/baselines_tofuh1p7_$s.pt
+    tag=tofuh1p7_eval$s
+    ft "$E" 99 "${adapter}_timing"
+    members=""
+    for m in $(seq 1 16); do ft "$E" "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
+
+    [ -f "$samples" ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
+        --loss-mode token --projector iterative --dataset "$corpus" --split train \
+        --n-train 100000 --max-length 128 --proj-batch-size 16 \
+        --n-samples 8 --n-iterations 5 --tol 0 $POST \
+        --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+    [ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
+        --adapter "$adapter" --members $members --like "$samples" --dropconnect-p \
+        --out "$baselines"
+    [ -f figures/$tag.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+        --base-model "$MODEL" --adapter "$adapter" --max-length 128 --correct-frac "$FRAC" \
+        --samples "$samples" "$baselines" \
+        --methods token/isotropic_measured token/projected_measured baseline/lora_ensemble \
+        --subsets 2 4 8 --subset-methods baseline/lora_ensemble \
+        --out figures/$tag.json
+fi
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

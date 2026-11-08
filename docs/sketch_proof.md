@@ -207,6 +207,24 @@ Two failure modes remain:
 Both lead to under-projection (Proposition 1), and the measured $\alpha$
 then shrinks the samples.
 
+**Observed weakness (E47).** The first failure mode does occur on
+corpora with a flat spectrum. On undertrained TOFU and on Alpaca, the
+sketch's kept rank drops below $k-16$, so the rule stops, while
+$\lambda_k(J)/\lambda_1(J)$ is still about $2\cdot10^{-5}$. At that
+point many of $J$'s directions above the cutoff lie in the window of
+Proposition 3. The sketch then behaves as if the cutoff were about
+$10^{-5}$ rather than $10^{-6}$. It keeps about 20% fewer directions, and
+its one-batch constraint residual is 3-6% of $\|Jv\|$ against 0.1-0.5%
+for the exact factor. The projection's direction is still the same
+(cosine $\ge 0.9997$).
+
+On bio the spectrum has already fallen past the cutoff at $k$
+($\lambda_k/\lambda_1 \approx 5\cdot10^{-7}$), so the effect is small.
+A rule that also requires the Gram's own tail to pass the cutoff with a
+margin for the window,
+$\lambda_{\min}(G)/\lambda_{\max}(G) < \mathrm{rtol}/\hat\kappa^2$,
+would close the gap at the price of a larger $k$.
+
 ## 6. Cost
 
 The exact factor forms $JJ^\top$ with a VJP and a JVP per row: $2n$
@@ -216,9 +234,9 @@ cost is $k/n$ of the exact precompute, or $k/(2n)$ with the VJP-only Gram.
 
 On the bio corpus, $r \approx 150$ of $n \approx 860$ rows, which gives
 $k = 192$, about a fifth of the passes. The precompute fell from 39 to
-8 min (E36, E38). Where the rank fraction approaches 1, as on undertrained
-TOFU (39%, E44) or pretrained models on fresh text (E47), the saving
-shrinks accordingly.
+8 min (E36, E38). Where the rank fraction is larger the saving shrinks: E47 measured
+the exact rank at 58% of rows on Alpaca and 74% on undertrained TOFU,
+where the sketch grows to 49% and 62% of the rows.
 
 ## 7. Empirical checks
 
@@ -228,8 +246,11 @@ shrinks accordingly.
 | fewer kept directions with the sketch (Prop. 3) | E36 | 22.0k vs 25.5k |
 | AUROCs unchanged | E36 | within 0.012 on every task |
 | $k$ below the rank under-projects (Prop. 1, 4) | E41 | $k=64, 96$: AUROC −0.03 to −0.08; flat from $k=192$ |
-| rank fraction across corpora | E39, E40, E44 logs | bio 15-20%, TOFU 24-39%, 6-epoch PopQA 33% |
-| per-batch spectrum, fidelity, rank fraction on Alpaca and pretrained text | E47 | pending |
+| sketched rank per target-token row | E39, E40, E42, E44 logs | bio 18%, TOFU 20 ep 34-36%, PopQA 6 ep 38-39%, TOFU 3 ep 58% |
+| exact per-batch rank (rtol $10^{-6}$) | E47 | bio 24%, Alpaca 58%, TOFU 3 ep 74%; pretrained FineWeb pending |
+| sketch never removes much of the exact projection (Prop. 1) | E47 | removed $\le 0.3\%$ of its norm; cosine $\ge 0.9997$ |
+| cutoff window: fewer kept directions (Prop. 3) | E47 | 14-20% fewer than exact |
+| flat spectra fool the stopping rule (Sec. 5) | E47 | TOFU 3 ep, Alpaca: one-batch residual 30-50x the exact factor's |
 
 ## References
 

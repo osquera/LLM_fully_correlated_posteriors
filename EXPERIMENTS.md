@@ -134,7 +134,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    adds ~+0.02 to the softmax on wrong answers where ensemble MI adds
    ~0. On coverage the posterior's best showings are TOFU unseen
    authors (level with 8 members, ahead of 2-4) and PopQA unseen facts
-   (ahead of 2 members, level with 4-8). The per-batch rank is 15-33% of
+   (ahead of 2 members, level with 4-8). The per-batch rank (sketched, per target token; see E47) is 18-58% of
    the rows on every corpus (highest on the underfit PopQA model), and
    the sketch needs k above it (E41). Cost in fine-tunes depends on the
    fine-tune: 3.3 (bio 135M) to ~18 (6-epoch PopQA).
@@ -154,6 +154,13 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    members vs ~60 fine-tunes of posterior) it is still +0.11 ahead: the
    ensemble saturates at 8 members. The lead closes as training lengthens
    (ensemble overtakes between 5 and 8 epochs, E45).
+14. **Semantic entropy covers the posterior's blind spot.** On the
+   underfit PopQA model it is the best error detector (0.726, +0.04 over
+   the softmax), where the posterior is at chance; on fit bio models it
+   adds nothing beyond the MAP's entropy and the posterior leads by
+   0.12-0.15; it never detects unseen facts (E46). The sketch keeps the
+   exact projection's direction everywhere (cos >= 0.9997, E47) but
+   under-projects more where the spectrum is flat (TOFU 3 ep, Alpaca).
 
 ---
 
@@ -1314,7 +1321,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   `bootstrap_bio360.json`, `error_breakdown_bio360_{s}.json`).
 - **Cost.** Fine-tune 362-370 s (10 per element; 135M: ~305 s).
   Precompute 927-952 s (135M: ~478 s); per-batch rank 18.8-19.8k of
-  122k rows (15-16%, 27.3k J J^T columns formed); 5 sweeps 504-513 s;
+  122k rows (17-18% of the 108k target-token rows, 27.3k J J^T columns formed); 5 sweeps 504-513 s;
   alpha 306-550 s for both snapshots. Posterior at 5 sweeps ~1600 s =
   ~4.4 fine-tunes (135M: 3.3), at 10 ~2250 s = ~6.2. The posterior's
   cost grows with P, the fine-tune's barely.
@@ -1353,7 +1360,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   `popqah{s}_ep*_map.json`, `posterior_popqah{s}.json`,
   `bootstrap_popqah.json`, `error_breakdown_popqah{s}.json`).
 - **Cost.** 6-epoch fine-tune 63-68 s. Precompute 756-862 s; per-batch
-  rank 33.2-33.7k of 101k rows (33%, the highest yet: an underfit model
+  rank 33.2-33.7k of 101k rows (38-39% of the target-token rows: an underfit model
   leaves most token gradients non-zero); 5 sweeps 280-291 s. Posterior at
   5 sweeps ~1200 s = ~18 fine-tunes: when fine-tuning is short, the
   precompute dominates.
@@ -1404,7 +1411,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   128, 20 epochs, "correct" = >= 80% of answer tokens; E38's design
   (`tofu_eval{s}.json`, `posterior_tofu{s}.json`, `bootstrap_tofu.json`).
 - **Cost.** Fine-tune 197-204 s. Precompute 802-982 s; per-batch rank
-  28.5-30.1k of 118-127k rows (24%); 5 sweeps 285-316 s. Posterior at
+  28.5-30.1k of 118-127k rows (34-36% of the target-token rows); 5 sweeps 285-316 s. Posterior at
   5 sweeps ~1250 s = ~6 fine-tunes.
 - **Accuracy.** Every trained pair is answered (token share >= 0.8) at
   every f, so there are no wrong answers: the error task is empty. f = 0
@@ -1477,7 +1484,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **Accuracy.** f = 1 0.33-0.37, f = 2 0.85-0.89, f = 4 and 8 1.00;
   431-459 wrong of 1300, nearly all at f = 1: underfitting errors, as E40.
 - **Cost.** 3-epoch fine-tune 60-64 s. Precompute 2634-2783 s; per-batch
-  rank 94-96k of 241-251k rows (39%, the highest yet); 5 sweeps 574-588 s.
+  rank 94-96k of 241-251k rows (57-58% of the 163k target-token rows; E47's exact rank: 74%); 5 sweeps 574-588 s.
   Posterior at 5 sweeps ~3400 s = ~55 fine-tunes (~7x the 8-member
   ensemble).
 - **Results.** Within-entropy AUROC, mean of 3:
@@ -1515,11 +1522,11 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
   | epochs | acc f = 1 | wrong | post | ens2 | ens4 | ens8 | MAP 1-conf | logit post / ens8 | rank | cost (fine-tunes) |
   |---|---|---|---|---|---|---|---|---|---|---|
-  | 3 | 0.35 | 431 | **0.923** | 0.765 | 0.795 | 0.809 | 0.655 | +0.183 / +0.096 | 39% | ~55 |
-  | 5 | 0.93 | 45 | **0.947** | 0.882 | 0.904 | 0.911 | 0.758 | +0.075 / +0.057 | 34% | ~33 |
-  | 8 | 1.00 | 1 | 0.947 | 0.936 | 0.955 | 0.967 | 0.856 | +0.012 / +0.014 | 30% | ~20 |
-  | 12 | 1.00 | 0 | 0.977 | 0.953 | 0.971 | 0.984 | 0.852 | +0.008 / +0.010 | 25% | ~11 |
-  | 20 | 1.00 | 0 | 0.943 | 0.953 | 0.982 | 0.988 | 0.803 | +0.008 / +0.011 | 24% | ~7 |
+  | 3 | 0.35 | 431 | **0.923** | 0.765 | 0.795 | 0.809 | 0.655 | +0.183 / +0.096 | 58% | ~55 |
+  | 5 | 0.93 | 45 | **0.947** | 0.882 | 0.904 | 0.911 | 0.758 | +0.075 / +0.057 | 51% | ~33 |
+  | 8 | 1.00 | 1 | 0.947 | 0.936 | 0.955 | 0.967 | 0.856 | +0.012 / +0.014 | 44% | ~20 |
+  | 12 | 1.00 | 0 | 0.977 | 0.953 | 0.971 | 0.984 | 0.852 | +0.008 / +0.010 | 37% | ~11 |
+  | 20 | 1.00 | 0 | 0.943 | 0.953 | 0.982 | 0.988 | 0.803 | +0.008 / +0.011 | 35% | ~7 |
 
   The posterior's own unseen AUROC stays 0.92-0.98 at every length; the
   ensemble's rises from 0.81 to 0.99 as training lengthens, overtaking it
@@ -1545,19 +1552,89 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   early in training (members agree on half-learned facts as on unseen
   ones), not from the posterior improving: it is flat across lengths,
   while the ensemble catches up by 8 epochs. Cost falls with training
-  length (rank 39% -> 24%, fine-tunes longer), from ~55 to ~7 fine-tunes.
+  length (rank 58% -> 35%, fine-tunes longer), from ~55 to ~7 fine-tunes.
+
+## E46 Semantic entropy baseline
+
+- **Date / job.** 2026-11-08; `46_semantic_entropy.lsf` (job 29921261).
+  `semantic_entropy_bio.py`: 10 answers per probe from the MAP at
+  temperature 1, discrete semantic entropy over meaning clusters (exact
+  match for bio and PopQA, answers cut at ". " for bio; bidirectional NLI,
+  deberta-v3-base, for TOFU), added to the E38, E39, E40, E42 and E44
+  evaluations (`se_{bio,bio360,popqah,tofu,tofuh}_eval{s}.json`,
+  `bootstrap_se_*.json`). Clusters per probe: bio 1.8-2.0, bio360 1.6-1.7,
+  PopQA 5.5-5.8, TOFU 9.2-9.9 of 10.
+- **Results.** Within-entropy AUROC, mean of 3 (post = posterior at 5
+  sweeps; raw AUROC in brackets for SE):
+
+  | setting | task | SE | post | ens8 | MAP 1-conf | logit gain SE / post / ens8 |
+  |---|---|---|---|---|---|---|
+  | bio 135M | wrong | 0.659 (0.845) | **0.784** | 0.770 | 0.713 | -0.008 / +0.021 / +0.004 |
+  | bio 135M | unseen | 0.593 (0.744) | 0.788 | **0.879** | 0.596 | -0.009 / +0.060 / +0.119 |
+  | bio 360M | wrong | 0.611 (0.865) | 0.764 | **0.836** | 0.658 | +0.003 / +0.020 / +0.004 |
+  | PopQA 6 ep | wrong | **0.726** (0.907) | 0.607 | 0.690 | 0.685 | **+0.038** / -0.001 / +0.004 |
+  | PopQA 6 ep | unseen | 0.486 (0.700) | **0.704** | 0.689 | 0.667 | +0.001 / +0.030 / +0.017 |
+  | TOFU 20 ep | unseen | 0.461 (0.601) | **0.984** | 0.982 | 0.868 | 0.000 / +0.003 / +0.005 |
+  | TOFU 3 ep | unseen | 0.498 (0.509) | **0.925** | 0.805 | 0.659 | 0.000 / +0.185 / +0.094 |
+  | TOFU 3 ep | wrong | 0.479 (0.521) | 0.537 | 0.615 | **0.800** | -0.001 / 0.000 / +0.001 |
+
+  Bootstrap, post minus SE: bio wrong +0.124 [+0.079, +0.154], bio360
+  wrong +0.153, PopQA wrong -0.120 [-0.176, -0.060], PopQA unseen
+  +0.218; every bio, TOFU unseen / rare gap > +0.19.
+- **Showed.** Semantic entropy is the best error detector on the
+  underfit PopQA model (0.726, +0.04 on top of the softmax, where
+  nothing else adds), i.e. on exactly the errors the posterior misses
+  (E40); on the fit bio models its raw AUROC is high but it carries
+  little beyond the MAP's entropy (within-entropy 0.61-0.66, logistic
+  gain ~0), and the posterior is ahead by 0.12-0.15. It does not detect
+  never-trained facts anywhere (within-entropy ~0.5). The two are
+  complementary by error type: SE for undertrained guesses, the posterior
+  for fit-but-wrong answers. **Caveat:** on TOFU the NLI clustering is
+  degenerate (9-10 clusters of 10 at temperature 1 with 64-token answers),
+  so TOFU's SE numbers are not a fair test; a rerun would need the first
+  sentence only or a lower temperature.
+
+## E47 Per-batch rank and sketch fidelity (rank profile)
+
+- **Date / job.** 2026-11-08; `47_rank_profile.lsf` (job 29921262).
+  `rank_profile.py` on 16 batches spread over each constraint set: exact
+  spectrum of J_b J_b^T, the adaptive sketch (k from 192), and 8 random
+  vectors projected by both factors (`rank_profile_{bio1,tofuh1,alpaca}.json`).
+  Element 4 (FineWeb on the pretrained 360M) hit the 4 h limit without
+  output: the corpus was gone and streaming FineWeb on a compute node
+  hung; rerun after building it on a login node.
+- **Results** (means over 16 batches; rank as a share of target-token
+  rows at rtol 1e-6 unless noted):
+
+  | corpus | rows | exact rank 1e-4 / 1e-6 / 1e-8 | sketch k / rows | sketch kept vs exact | lam_k / lam_1 | cos(exact, sketch) | removed from exact | residual exact / sketch |
+  |---|---|---|---|---|---|---|---|---|
+  | bio 135M | ~770 | 15% / 24% / 38% | 29% | -14% | ~5e-7 | >= 0.99999 | <= 1.1e-3 | ~3e-3 / ~1.2e-2 |
+  | TOFU 3 ep | ~890 | 59% / 74% / 87% | 62% | -19% | ~2e-5 | >= 0.99992 | <= 1.1e-3 | ~1e-3 / ~3-5e-2 |
+  | Alpaca | ~1460 | 38% / 58% / 67% | 49% | -20% | ~1.5e-5 | >= 0.9997 | <= 2.8e-3 | ~5e-3 / ~6e-2 |
+
+- **Correction.** The rank fractions quoted from E39-E45's logs divided
+  the sketch's kept rank by all J rows including padding; over the
+  non-zero (target-token) rows they are bio 18%, TOFU 20 ep 34-36%, PopQA
+  6 ep 38-39%, TOFU 3 ep 58% (exact: 74%). Fixed in those entries.
+- **Showed.** (1) docs/sketch_proof.md's Prop. 1 holds everywhere: the
+  sketch removes at most 0.3% of the exact projection's norm from it
+  (only sub-cutoff directions), and the projections agree to cosine
+  >= 0.9997. (2) Prop. 3's cutoff window is visible: the sketch keeps
+  14-20% fewer directions than the exact factor. On bio the spectrum
+  falls past rtol before k (lam_k / lam_1 ~5e-7), so this costs a little
+  (one-batch residual 1% of ||J v||). On TOFU 3 ep and Alpaca the spectrum
+  is flatter: the stopping rule (kept rank <= k - 16) fires while lam_k /
+  lam_1 is still ~2e-5, so the sketch's effective cutoff is ~1e-5 rather
+  than 1e-6 and the one-batch residual is 3-6% of ||J v||, 30-50x the
+  exact factor's: under-projection, absorbed by the measured alpha. A
+  stopping rule on the Gram's tail (grow until lam_min(G) / lam_max(G) is
+  below rtol / kappa^2) would close it, at a larger k. (3) Where the
+  sketch pays: bio 24% rank (k = 29% of rows), Alpaca 58%, undertrained
+  TOFU 74%: on a model not yet fit to its data the saving is small.
 
 ---
 
 ## Pending
 
-- **E46** (`46_semantic_entropy.lsf`): semantic entropy (10 answers per
-  probe at temperature 1, entropy of meaning clusters;
-  `semantic_entropy_bio.py`: exact-match clusters for bio and PopQA, NLI for
-  TOFU) added to the E38, E39, E40, E42 and E44 evaluations, so it is
-  bootstrapped against the posterior and ensembles on the same probes.
-- **E47** (`47_rank_profile.lsf`): per-batch rank of J_b as a share of its
-  rows (rtol 1e-4 / 1e-6 / 1e-8) and the sketch's fidelity against the
-  exact factor (`rank_profile.py`) on bio, 3-epoch TOFU, Alpaca (E01's
-  LoRA) and FineWeb on the pretrained 360M (E26): where the sketch helps,
-  and the empirical side of `docs/sketch_proof.md`.
+- **E47 element 4** (FineWeb on the pretrained 360M): build
+  data/fineweb/corpus.json on a login node, then resubmit element 4.

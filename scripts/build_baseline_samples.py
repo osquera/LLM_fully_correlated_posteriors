@@ -22,6 +22,7 @@ so evaluate_posterior.py and analyze_posterior.py accept it alongside it.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -40,6 +41,8 @@ def parse_args():
     ap.add_argument("--dropconnect-p", type=float, nargs="*", default=[0.1])
     ap.add_argument("--n-samples", type=int, default=8, help="DropConnect masks")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--name", default=None,
+                    help="method name for the members (default lora_ensemble), e.g. bagged_ensemble")
     ap.add_argument("--save-dtype", choices=["float32", "float16"], default="float32")
     ap.add_argument("--append", action="store_true",
                     help="add --members to the ensemble already in --out (members already "
@@ -58,12 +61,13 @@ def lora_theta(base_model: str, adapter: str) -> tuple[ParamSpace, torch.Tensor]
 
 def main():
     args = parse_args()
-    like = torch.load(args.like, weights_only=False, mmap=True)  # only its args are read
+    like = (json.loads(Path(args.like).read_text()) if args.like.endswith(".json")
+            else torch.load(args.like, weights_only=False, mmap=True))  # only its args are read
     space, theta = lora_theta(args.base_model, args.adapter)
     print(f"theta_map from {args.adapter}: {space}")
 
     methods, done, prev = {}, [], None
-    key = "lora_ensemble" if is_adapter(args.adapter) else "ensemble"
+    key = args.name or ("lora_ensemble" if is_adapter(args.adapter) else "ensemble")
     if args.append and Path(args.out).exists():
         prev = torch.load(args.out, weights_only=False)
         done = prev["info"]["members"]

@@ -1,0 +1,86 @@
+#!/bin/sh
+# E49: two controls on the existing SmolLM2 results (EXPERIMENTS.md E48b).
+#  (a) Membership baselines: every trained fact is probed with its exact
+#      training question, so the familiarity of the question text alone
+#      (question NLL, Min-20%, NLL ratio to the base model;
+#      scripts/membership_scores.py) might separate trained from held-out
+#      probes without a posterior.
+#  (b) Bagged ensembles: members trained on bootstrap resamples of the
+#      documents (finetune_lora.py --bootstrap-seed), more diverse than
+#      seed-only members, which saturate at 2 in undertrained models.
+# Both are added to the existing evaluations (no posterior rerun;
+# scripts/merge_eval_scores.py), so bootstrap_bio.py compares them with
+# the posterior probe for probe.
+#   1-3  corpus s: TOFU 135M at 3 epochs (E45's eval, 16 bagged members) and
+#        bio 135M (E38's eval, 8 bagged members, 20 epochs)
+#   4-6  corpus s-3: TOFU 1.7B (E48's eval, 16 bagged members); needs E48
+# ~1.5 h (1-3), ~2 h (4-6) on an H100.
+#   bsub -J "pb_e49[1-3]" < scripts/hpc/49_controls.lsf
+#   bsub -J "pb_e49[4-6]" -w "ended(<E48 job id>)" < scripts/hpc/49_controls.lsf
+#BSUB -J "pb_e49[1-6]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=48GB]"
+#BSUB -W 12:00
+#BSUB -o logs/%J_%I_e49.out
+#BSUB -e logs/%J_%I_e49.err
+
+. scripts/hpc/env.sh
+
+FRAC=${FRAC:-0.8}
+i=$LSB_JOBINDEX
+
+# control NAME MODEL CORPUS ADAPTER BASE_EVAL LIKE EPOCHS MAXLEN N_BAGGED SUBSETS EVAL_EXTRA...
+control() {
+    name=$1; model=$2; corpus=$3; adapter=$4; base=$5; like=$6; ep=$7; ml=$8; nb=$9
+    shift 9; sub=$1; shift
+    out=figures/e49_$name.json
+    for f in "$corpus" "$base" "$like"; do
+        [ -f "$f" ] || { echo "skip $name: missing $f"; return; }
+    done
+    [ -d "$adapter" ] || { echo "skip $name: missing $adapter"; return; }
+    echo "=== $name ==="
+    [ -f "$out" ] || uv run python scripts/membership_scores.py --corpus "$corpus" \
+        --base-model "$model" --adapter "$adapter" --eval "$base" --out "$out"
+    members=""
+    for b in $(seq 1 "$nb"); do
+        m=${adapter}_bag$b
+        [ -f "$m/run.json" ] || uv run python scripts/finetune_lora.py --model "$model" \
+            --dataset "$corpus" --split train --max-length "$ml" --batch-size 16 \
+            --epochs "$ep" --lr 1e-3 --lora-targets q_proj v_proj gate_proj up_proj down_proj \
+            --seed $((100 + b)) --bootstrap-seed "$b" --out "$m"
+        members="$members $m"
+    done
+    bag=samples/bagged_$name.pt
+    [ -f "$bag" ] || uv run python scripts/build_baseline_samples.py --base-model "$model" \
+        --adapter "$adapter" --members $members --like "$like" --dropconnect-p \
+        --name bagged_ensemble --out "$bag"
+    ev=figures/e49_${name}_bagged.json
+    [ -f "$ev" ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
+        --base-model "$model" --adapter "$adapter" --max-length "$ml" "$@" \
+        --samples "$bag" --methods baseline/bagged_ensemble \
+        --subsets $sub --subset-methods baseline/bagged_ensemble --out "$ev"
+    uv run python scripts/merge_eval_scores.py --base "$out" --other "$ev" \
+        --prefix baseline/bagged_ensemble --out "$out"
+    [ "${KEEP:-0}" = 1 ] || rm -f "$bag"
+}
+
+m135=HuggingFaceTB/SmolLM2-135M
+if [ "$i" -le 3 ]; then
+    s=$i
+    control tofuh$s $m135 data/tofuh$s/corpus.json checkpoints/tofuh${s}_ep3_lora \
+        figures/tofuh_n48_eval$s.json samples/posterior_tofuh_n48_eval$s.json 3 128 16 "2 4 8" \
+        --correct-frac "$FRAC"
+    control bio$s $m135 data/bio_err$s/corpus.json checkpoints/bio_err${s}_lora \
+        figures/bio_sketch_eval$s.json samples/posterior_bio_sketch$s.json 20 96 8 "2 4"
+else
+    s=$((i - 3))
+    a=$(ls -d checkpoints/tofuh1p7_${s}_ep*_lora_ens1 2>/dev/null | head -1)
+    a=${a%_ens1}
+    ep=${a##*_ep}; ep=${ep%_lora}
+    control tofuh1p7_$s HuggingFaceTB/SmolLM2-1.7B data/tofuh$s/corpus.json "$a" \
+        figures/tofuh1p7_eval$s.json samples/posterior_tofuh1p7_$s.json "$ep" 128 16 "2 4 8" \
+        --correct-frac "$FRAC"
+fi

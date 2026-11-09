@@ -52,6 +52,9 @@ def parse_args():
     ap.add_argument("--out", default="checkpoints/smollm2_lora")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--bootstrap-seed", type=int, default=None,
+                    help="train on a bootstrap resample of the documents (same count, with "
+                         "replacement): a bagged ensemble member")
     ap.add_argument("--tf32", action="store_true", help="TF32 matmuls on Ampere/Hopper")
     ap.add_argument("--full", action="store_true",
                     help="full fine-tuning (every weight trainable) instead of LoRA")
@@ -60,6 +63,12 @@ def parse_args():
 
 def build_loader(args, tokenizer):
     texts = load_texts(args.dataset, args.split, args.text_field)
+    if args.bootstrap_seed is not None:
+        g = torch.Generator().manual_seed(args.bootstrap_seed)
+        idx = torch.randint(len(texts), (len(texts),), generator=g).tolist()
+        print(f"bootstrap resample (seed {args.bootstrap_seed}): {len(set(idx))} of {len(texts)} "
+              "distinct documents")
+        texts = [texts[i] for i in idx]
     enc = encode_texts(tokenizer, texts, args.max_length, loss_on=args.loss_on)
     print(f"loss on {args.loss_on}: {int(enc['loss_mask'].sum())} target tokens of "
           f"{int(enc['attention_mask'].sum())}")

@@ -1735,3 +1735,15 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 - **E48 elements 5-6** (TOFU corpora 2-3 at 1.7B): add to the TOFU table
   and bootstrap over three corpora.
+- **E49** (`49_controls.lsf`): the two missing controls from E48b, added
+  to the existing evaluations without rerunning the posterior. (a)
+  Membership baselines on the probe question (`membership_scores.py`:
+  question NLL, Min-20%, NLL ratio to the base model): does question
+  familiarity alone separate trained from held-out probes? (b) Bagged
+  ensembles (`finetune_lora.py --bootstrap-seed`; 16 members on TOFU, 8 on
+  bio): are seed-only ensembles a weak baseline? On TOFU 135M (3 ep), bio
+  135M and TOFU 1.7B (after E48).
+- **E50** (`50_qwen.lsf`): a second model family. Both core designs (bio
+  well fit; TOFU undertrained with 16 seed + 16 bagged members) on
+  Qwen2.5-0.5B and Qwen3-0.6B (LoRA P ~3.9M), with semantic entropy and
+  the membership scores. Smoke-tested on CPU for both models.

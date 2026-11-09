@@ -39,6 +39,10 @@ def main():
     ap.add_argument("--n-boot", type=int, default=1000)
     ap.add_argument("--n-bins", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--cluster", action="store_true",
+                    help="resample persons / authors (probe_name) with all their probes, not single "
+                         "probes: probes of one person are correlated, so the probe bootstrap "
+                         "understates the uncertainty")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -46,7 +50,8 @@ def main():
     for path in args.evals:
         r = json.load(open(path))["report"]
         freq, correct = np.array(r["probe_freq"]), np.array(r["probe_correct"], bool)
-        reps.append({"path": path, "scores": {k: torch.tensor(v) for k, v in r["probe_scores"].items()},
+        reps.append({"path": path, "names": np.array(r.get("probe_name") or [str(i) for i in range(len(freq))]),
+                     "scores": {k: torch.tensor(v) for k, v in r["probe_scores"].items()},
                      "tasks": task_masks(freq, correct)})
     methods = [args.ref, *args.vs]
     rng = np.random.default_rng(args.seed)
@@ -66,9 +71,17 @@ def main():
 
             per_rep.append({"n_pos": int(y.sum()), "n_neg": int((~y).sum()),
                             **aurocs(torch.arange(len(y)))})
+            groups = None
+            if args.cluster:
+                _, gid = np.unique(rep["names"][keep.numpy()], return_inverse=True)
+                groups = [np.flatnonzero(gid == g) for g in range(gid.max() + 1)]
             b = []
             for _ in range(args.n_boot):
-                a = aurocs(torch.from_numpy(rng.integers(0, len(y), len(y))))
+                if groups is None:
+                    idx = rng.integers(0, len(y), len(y))
+                else:
+                    idx = np.concatenate([groups[g] for g in rng.integers(0, len(groups), len(groups))])
+                a = aurocs(torch.from_numpy(idx))
                 b.append([a[args.ref] - a[m] for m in args.vs])
             boots.append(np.array(b))
         gaps = np.mean(boots, axis=0)  # (n_boot, n_vs): mean gap over replications

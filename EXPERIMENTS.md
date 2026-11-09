@@ -1695,6 +1695,40 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   Over 135M -> 360M -> 1.7B the posterior's lead over isotropic noise on
   wrong is +0.08 -> +0.08 -> -0.01. With 150-260 errors the CIs are wide.
 
+## E48b Robustness checks (local, no new runs)
+
+- **Cluster bootstrap.** `bootstrap_bio.py --cluster` resamples persons /
+  authors with all their probes (probes of one person are correlated; the
+  probe bootstrap understates the spread). The headline intervals barely
+  move: TOFU 135M post minus ens48 on unseen +0.112 [+0.101, +0.124]
+  (probe bootstrap [+0.105, +0.120]); TOFU 1.7B corpus 1 post minus ens16
+  +0.188 [+0.166, +0.211]; bio wrong, post minus ens2 [2:0] / ens8 /
+  isotropic / MAP 1-conf: 135M +0.037 [+0.018, +0.070] / +0.014 [-0.003,
+  +0.051] / +0.081 / +0.070; 360M -0.033 / -0.072 [-0.126, -0.016] /
+  +0.079 / +0.105; 1.7B +0.023 / +0.008 / -0.010 [-0.063, +0.040] /
+  +0.083 [+0.021, +0.139].
+- **Name novelty vs knowledge.** TOFU's unseen task split by whether the
+  author was trained on (within-entropy AUROC against trained pairs):
+
+  | setting | split | post | ensemble | MAP 1-conf | k-NN (best layer) |
+  |---|---|---|---|---|---|
+  | 135M, 3 ep, 48 members | unseen author | 0.939 | 0.825 | 0.680 | 0.572 |
+  | 135M, 3 ep, 48 members | held-out pair, known author | 0.904 | 0.795 | 0.655 | 0.456 |
+  | 1.7B, 2 ep, 16 members | unseen author | 0.880 | 0.609 | 0.656 | 0.541 |
+  | 1.7B, 2 ep, 16 members | held-out pair, known author | 0.887 | 0.713 | 0.682 | 0.586 |
+  | 135M, 20 ep, 8 members | unseen author | 0.982 | 0.996 | 0.969 | 0.474 |
+  | 135M, 20 ep, 8 members | held-out pair, known author | 0.959 | 0.965 | 0.770 | 0.264 |
+
+  The posterior flags unanswered questions about known authors as well as
+  about unknown ones; input-distance (k-NN) does not. The undertrained
+  result is about which facts were trained, not novel names.
+- **Not yet controlled.** Every trained fact is probed with its exact
+  training question, so a membership signal (the MAP's NLL of the
+  question text itself) might separate trained from held-out questions
+  without any posterior; not computed yet. Ensemble members differ only by
+  seed; data-bagged members might be more diverse in the undertrained
+  regime, where seed-only members saturate at 2.
+
 ---
 
 ## Pending

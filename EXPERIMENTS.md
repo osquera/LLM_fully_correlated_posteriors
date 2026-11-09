@@ -161,6 +161,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    0.12-0.15; it never detects unseen facts (E46). The sketch keeps the
    exact projection's direction everywhere (cos >= 0.9997, E47) but
    under-projects more where the spectrum is flat (TOFU 3 ep, Alpaca).
+15. **Scale (E48, SmolLM2-1.7B).** The undertrained finding holds and
+   grows: +0.19 over a 16-member ensemble on never-trained TOFU questions,
+   the ensemble flat from 2 members. The fit-but-wrong finding fades: at
+   1.7B the posterior is level with ensembles and with isotropic noise on
+   errors and no longer adds to the softmax. The posterior costs ~4.5
+   fine-tunes on bio at 1.7B (rank 14% of rows), ~96 short ones on TOFU.
 
 ---
 
@@ -1635,16 +1641,63 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   is large only once the model fits its constraint data; on text it was
   never fit to, nearly every token gradient is independent.
 
+## E48 SmolLM2-1.7B: both core findings at a third model size
+
+- **Date / job.** 2026-11-08 to 11-09; `48_smollm_1p7b.lsf` (job 29927086).
+  LoRA P = 7.47M, lr 1e-3 (training losses stable), sketch 192 with the
+  VJP-only Gram (`--max-sketch-gb 40 --row-batch 8`). Elements 1-3 bio
+  corpora 1-3 (`bio1p7_eval{s}.json`, `se_bio1p7_eval{s}.json`,
+  `error_breakdown_bio1p7_{s}.json`, `bootstrap_bio1p7.json`); elements
+  4-6 TOFU corpora 1-3 (`tofuh1p7_eval{s}.json`). Elements 5-6 were still
+  running when copied; TOFU corpus 1 below.
+- **Bio (well fit, 20 epochs).** MAP f = 1 accuracy 0.84-0.91 (135M:
+  0.67-0.73), so only 152-264 errors of 3120 seen probes. Cost: fine-tune
+  1140-1370 s; precompute 3136-3736 s (sketched rank 14.5-16.0k of 108k
+  target-token rows, 14%), 5 sweeps 1602-1890 s, alpha 728-1186 s (both
+  snapshots): posterior at 5 sweeps ~5800 s = ~4.5 fine-tunes. Within-
+  entropy AUROC, mean of 3:
+
+  | task | post 5 | post 10 | ens2 | ens4 | ens8 | iso | MAP 1-conf | SE |
+  |---|---|---|---|---|---|---|---|---|
+  | unseen | 0.820 | 0.827 | 0.925 | 0.949 | **0.959** | 0.682 | 0.638 | 0.582 |
+  | rare | 0.771 | 0.783 | 0.868 | 0.917 | **0.948** | 0.663 | 0.587 | 0.515 |
+  | wrong | 0.740 | 0.742 | 0.694 | 0.705 | 0.731 | **0.750** | 0.657 | 0.672 |
+
+  Bootstrap, post 5 minus, on wrong: ens2 [2:0] +0.023 [-0.025, +0.090],
+  ens4 [4:0] +0.040 [-0.011, +0.113], ens8 +0.008 [-0.042, +0.083],
+  isotropic -0.010 [-0.065, +0.042], MAP 1-conf +0.083 [+0.019, +0.140],
+  SE +0.067 [-0.004, +0.144]; per replication post 0.780 / 0.793 / 0.646.
+  Logistic gain over the softmax (0.939) on wrong: post +0.007, iso
+  +0.005, ens8 -0.014. On unseen / rare every ensemble beats the posterior
+  by 0.09-0.18.
+- **TOFU corpus 1 (undertrained).** Trained-pair accuracy at 1 / 2 / 3 / 5
+  epochs 0.40 / 0.75 / 0.95 / 1.00: 2 epochs (331 errors of 1300). Cost:
+  2-epoch fine-tune ~196 s; posterior 16867 + 1976 s (precompute 13380 s,
+  sketched rank 70.6k of 163k rows, 43%) = ~96 fine-tunes, ~6x the
+  16-member ensemble. Within-entropy AUROC:
+
+  | task | post | ens2 | ens4 | ens8 | ens16 | iso | MAP 1-conf |
+  |---|---|---|---|---|---|---|---|
+  | unseen | **0.910** | 0.709 | 0.723 | 0.722 | 0.722 | 0.754 | 0.674 |
+  | wrong | 0.481 | 0.468 | 0.447 | 0.425 | 0.413 | 0.450 | **0.760** |
+
+  Bootstrap (probes), post minus ens16 on unseen +0.188 [+0.171, +0.206],
+  ens8 [8:0] +0.186; logistic gain on unseen post +0.161 vs ens16 +0.054.
+- **Showed.** (1) The undertrained finding is the robust one: at 1.7B
+  the posterior beats 16 members on never-trained questions by +0.19 (at
+  135M: +0.11 over 48), and the ensemble is flat from 2 members on
+  (0.709 -> 0.722), so no ensemble size closes the gap; errors in this
+  regime are again left to the MAP's confidence. (2) The fit-but-wrong
+  finding fades with scale: the posterior still beats the softmax's
+  confidence (+0.08) and is level with or slightly ahead of ensembles, but
+  isotropic noise at its measured scale does as well (0.750), and its
+  logistic gain over the softmax is gone (+0.007 vs +0.02 at 135M / 360M).
+  Over 135M -> 360M -> 1.7B the posterior's lead over isotropic noise on
+  wrong is +0.08 -> +0.08 -> -0.01. With 150-260 errors the CIs are wide.
+
 ---
 
 ## Pending
 
-- **E48** (`48_smollm_1p7b.lsf`): both core findings at SmolLM2-1.7B (LoRA
-  P = 7.5M). Elements 1-3: bio corpora 1-3, E38 / E39's design (8 members,
-  posterior at 5 and 10 sweeps, error breakdown, semantic entropy): does
-  the posterior still catch fit-but-wrong answers and add to the softmax?
-  Elements 4-6: TOFU corpora 1-3 (10 trained pairs per author), epochs
-  1 / 2 / 3 / 5 picking the largest with trained accuracy <= 0.85, 16
-  members (2-16-member groups), posterior at 5 sweeps: does the
-  posterior still beat ensembles on never-trained questions when the model
-  is undertrained?
+- **E48 elements 5-6** (TOFU corpora 2-3 at 1.7B): add to the TOFU table
+  and bootstrap over three corpora.

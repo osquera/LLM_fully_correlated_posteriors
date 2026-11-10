@@ -167,6 +167,14 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    1.7B the posterior is level with ensembles and with isotropic noise on
    errors and no longer adds to the softmax. The posterior costs ~4.5
    fine-tunes on bio at 1.7B (rank 14% of rows), ~96 short ones on TOFU.
+16. **Membership control (E49).** On TOFU the familiarity of the question
+   text (one forward pass) is nearly as good as the posterior on unseen
+   probes (0.907 vs 0.926) and better on never-seen authors (0.985 vs
+   0.939). What the posterior adds is knowledge-level: on held-out facts
+   of authors the model was trained on it beats question NLL (0.904 vs
+   0.842) and adds +0.077 on top of all membership scores. On bio,
+   membership scores explain none of the posterior's unseen or error
+   signal. Bagged ensembles are weaker than seed ensembles.
 
 ---
 
@@ -1648,8 +1656,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   VJP-only Gram (`--max-sketch-gb 40 --row-batch 8`). Elements 1-3 bio
   corpora 1-3 (`bio1p7_eval{s}.json`, `se_bio1p7_eval{s}.json`,
   `error_breakdown_bio1p7_{s}.json`, `bootstrap_bio1p7.json`); elements
-  4-6 TOFU corpora 1-3 (`tofuh1p7_eval{s}.json`). Elements 5-6 were still
-  running when copied; TOFU corpus 1 below.
+  4-6 TOFU corpora 1-3 (`tofuh1p7_eval{s}.json`, `bootstrap_tofuh1p7.json`).
 - **Bio (well fit, 20 epochs).** MAP f = 1 accuracy 0.84-0.91 (135M:
   0.67-0.73), so only 152-264 errors of 3120 seen probes. Cost: fine-tune
   1140-1370 s; precompute 3136-3736 s (sketched rank 14.5-16.0k of 108k
@@ -1683,6 +1690,12 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
   Bootstrap (probes), post minus ens16 on unseen +0.188 [+0.171, +0.206],
   ens8 [8:0] +0.186; logistic gain on unseen post +0.161 vs ens16 +0.054.
+- **TOFU, all three corpora** (2 epochs each; trained-pair accuracy
+  0.72-0.75; 331-370 errors). Within-entropy AUROC on unseen, mean of 3:
+  post 0.892, ens2 0.698, ens4 0.710, ens8 0.711, ens16 0.711, iso 0.734,
+  MAP 1-conf 0.678; person-cluster bootstrap post minus ens16 +0.181
+  [+0.170, +0.196], minus ens2 [2:0] +0.208. Logistic gain on unseen post
+  +0.147 vs ens16 +0.047. Wrong: post 0.525, ens16 0.512, MAP 1-conf 0.717.
 - **Showed.** (1) The undertrained finding is the robust one: at 1.7B
   the posterior beats 16 members on never-trained questions by +0.19 (at
   135M: +0.11 over 48), and the ensemble is flat from 2 members on
@@ -1729,13 +1742,58 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   seed; data-bagged members might be more diverse in the undertrained
   regime, where seed-only members saturate at 2.
 
+## E49 Controls: question-familiarity (membership) baselines, bagged ensembles
+
+- **Date / job.** 2026-11-09 to 11-10; `49_controls.lsf` elements 1-3 (job
+  29940338): TOFU 135M at 3 epochs (E45's evaluations) and bio 135M (E38's)
+  with `membership_scores.py` (question NLL, Min-20%, NLL ratio to the base
+  model, all on the probe's question text) and bagged ensembles
+  (`--bootstrap-seed`; 16 members on TOFU, 8 on bio), merged into
+  `e49_{tofuh,bio}{s}.json` (`bootstrap_e49_{tofuh,bio}.json`, person-cluster
+  bootstrap). Elements 4-6 (TOFU 1.7B) not yet in.
+- **TOFU unseen** (within-entropy AUROC, mean of 3): post 0.926, question
+  NLL 0.907, Min-20% 0.900, NLL ratio 0.879, seed ens48 0.813, bagged ens16
+  0.516. Post minus question NLL +0.018 [+0.006, +0.029], minus Min-20%
+  +0.025, minus ratio +0.047. Spearman(post, question NLL) 0.70-0.73. Split
+  by author (within-entropy / held-out logistic, softmax + score):
+
+  | split | post | question NLL | softmax + membership (NLL + ratio) | + post |
+  |---|---|---|---|---|
+  | unseen author | 0.939 | **0.985** | 0.998 | 1.000 |
+  | held-out pair of a known author | **0.904** | 0.842 | 0.875 | **0.952** |
+  | all unseen | 0.926 | 0.907 | 0.932 | **0.974** |
+
+  The +0.077 on known authors holds in all 3 corpora (0.873 / 0.874 /
+  0.877 -> 0.950 / 0.944 / 0.962).
+- **TOFU wrong:** question NLL 0.693 > post 0.537; no score adds to the
+  softmax (0.921-0.924).
+- **Bio** (within-entropy, person-cluster bootstrap, post minus): unseen
+  question NLL +0.160 [+0.108, +0.214], Min-20% +0.080; wrong question NLL
+  +0.192, Min-20% +0.173; rare Min-20% -0.073 (rarely seen facts have
+  unfamiliar questions). Membership adds nothing to the softmax on unseen
+  (0.785 -> 0.771) or wrong (0.868 -> 0.858); the posterior adds +0.06 /
+  +0.02 on top of it.
+- **Bagged ensembles** are worse than seed-only ones except on rare facts:
+  TOFU unseen 0.516 (seed 0.813), bio unseen 0.610 (seed 0.879), bio wrong
+  0.596 (seed 0.770), bio rare 0.989 (seed 0.979). Each member misses ~37%
+  of the documents, so members also disagree on trained facts; seed-only
+  ensembles were not a handicapped baseline.
+- **Showed.** A free single-pass baseline nearly matches the posterior's
+  headline TOFU number: never-seen authors are flagged by unfamiliar
+  question text alone (0.985). The posterior's distinctive signal is on
+  held-out facts of *known* authors, where the question text is new but
+  similar to trained ones: 0.904 vs 0.842, and +0.077 on top of every
+  membership score combined. The TOFU vs ensemble gaps (E44, E45, E48)
+  overstate what is specific to the posterior; the right comparison is
+  against membership scores, and the posterior still adds. On bio,
+  membership explains none of the posterior's unseen or error signal.
+
 ---
 
 ## Pending
 
-- **E48 elements 5-6** (TOFU corpora 2-3 at 1.7B): add to the TOFU table
-  and bootstrap over three corpora.
-- **E49** (`49_controls.lsf`): the two missing controls from E48b, added
+- **E49 elements 4-6** (TOFU 1.7B controls) and the rest of the earlier
+  E49 description: (`49_controls.lsf`): the two missing controls from E48b, added
   to the existing evaluations without rerunning the posterior. (a)
   Membership baselines on the probe question (`membership_scores.py`:
   question NLL, Min-20%, NLL ratio to the base model): does question

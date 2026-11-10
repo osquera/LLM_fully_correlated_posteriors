@@ -136,8 +136,9 @@ jobs never sync it (`UV_NO_SYNC=1` in env.sh). On the login node use
 `uv run --no-sync`: a plain `uv run` may sync the venv without the `gpu`
 extra. If every job dies within seconds at the torch check with
 `libcudart.so.12: cannot open shared object file` or
-`libcublasLt.so.*[0-9] not found`, the CUDA wheels are gone from the venv
-(this happened on 2026-11-10). Repair it on the login node, which has
+`libcublasLt.so.*[0-9] not found`, the venv no longer matches `uv.lock`
+(on 2026-11-10 it held torch 2.14.0+cu126 next to CUDA 13 libraries,
+instead of the locked 2.11.0+cu128 and its cu12 libraries). Repair it on the login node, which has
 network, then resubmit:
 `uv sync --extra gpu && uv run --no-sync python -c "import torch; print(torch.__version__, torch.version.cuda)"`.
 
@@ -254,7 +255,7 @@ analyse from there.
 - **Rank fractions read from logs** used all J rows, including padding,
   as the denominator. Divide by the target-token rows (`n_target_tokens`
   in the posterior sidecar).
-- **The shared venv lost its CUDA libraries** (2026-11-10): all jobs
+- **The shared venv drifted from `uv.lock`** (2026-11-10): all jobs
   exited in 2 s at the torch check. Fixed with `uv sync --extra gpu` on
   the login node.
 - **Assuming a job ran because the submit command was given.** Only the

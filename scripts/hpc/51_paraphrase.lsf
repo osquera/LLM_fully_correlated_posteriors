@@ -1,0 +1,66 @@
+#!/bin/sh
+# E51: facts or wording? The paraphrase test of E49's membership control.
+# Every bio fact is asked in all three phrasings (make_phrasing_corpus.py);
+# trained facts asked in a phrasing never seen in training have unfamiliar
+# wording but known content. A membership score (question NLL) should then
+# call them unseen; a score that tracks facts should still call them known.
+# scripts/analyze_phrasings.py compares the scores on untrained vs trained
+# facts in seen and in unseen wording, and on wording alone.
+# Existing theta_maps and members (E38 / E39 / E48); the posterior is
+# re-sampled at 5 sweeps (the earlier samples were deleted after scoring).
+#   1-3  SmolLM2-135M, bio corpora 1-3
+#   4-6  SmolLM2-360M
+#   7-9  SmolLM2-1.7B
+# ~1 h (135M), ~2 h (360M), ~5 h (1.7B) per element on an H100.
+#   bsub < scripts/hpc/51_paraphrase.lsf
+#BSUB -J "pb_e51[1-9]"
+#BSUB -q gpuh100
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -n 4
+#BSUB -R "span[hosts=1]"
+#BSUB -R "rusage[mem=48GB]"
+#BSUB -W 16:00
+#BSUB -o logs/%J_%I_e51.out
+#BSUB -e logs/%J_%I_e51.err
+
+. scripts/hpc/env.sh
+
+i=$LSB_JOBINDEX
+s=$(( (i - 1) % 3 + 1 ))
+case $(( (i - 1) / 3 )) in
+    0) MODEL=HuggingFaceTB/SmolLM2-135M; adapter=checkpoints/bio_err${s}_lora;    tag=bio135_$s ;;
+    1) MODEL=HuggingFaceTB/SmolLM2-360M; adapter=checkpoints/bio360_err${s}_lora; tag=bio360_$s ;;
+    2) MODEL=HuggingFaceTB/SmolLM2-1.7B; adapter=checkpoints/bio1p7_err${s}_lora; tag=bio1p7_$s ;;
+esac
+corpus=data/bio_err$s/corpus.json
+phr=data/bio_err$s/phrasings.json
+samples=samples/posterior_e51_$tag.pt
+baselines=samples/baselines_e51_$tag.pt
+ev=figures/e51_${tag}_eval.json
+out=figures/e51_$tag.json
+echo "=== $MODEL, corpus $s ($adapter) ==="
+for f in "$corpus" "$adapter/run.json"; do [ -e "$f" ] || { echo "missing $f"; exit 1; }; done
+
+[ -f "$phr" ] || (cd scripts && uv run python make_phrasing_corpus.py "../$corpus" "../$phr")
+members=""
+for m in 1 2 3 4 5 6 7 8; do
+    [ -d "${adapter}_ens$m" ] || { echo "missing ${adapter}_ens$m"; exit 1; }
+    members="$members ${adapter}_ens$m"
+done
+
+[ -f "$samples" ] || [ -f "$out" ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
+    --loss-mode token --projector iterative --dataset "$corpus" --split train \
+    --n-train 100000 --max-length 96 --proj-batch-size 16 \
+    --n-samples 8 --n-iterations 5 --tol 0 --sketch 192 --max-sketch-gb 40 --row-batch 8 \
+    --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
+[ -f "$baselines" ] || [ -f "$out" ] || uv run python scripts/build_baseline_samples.py \
+    --base-model "$MODEL" --adapter "$adapter" --members $members --like "$samples" \
+    --dropconnect-p --out "$baselines"
+[ -f "$ev" ] || uv run python scripts/evaluate_bio.py --corpus "$phr" --base-model "$MODEL" \
+    --adapter "$adapter" --samples "$samples" "$baselines" \
+    --methods token/isotropic_measured token/projected_measured baseline/lora_ensemble \
+    --out "$ev"
+[ -f "$out" ] || uv run python scripts/membership_scores.py --corpus "$phr" --base-model "$MODEL" \
+    --adapter "$adapter" --eval "$ev" --out "$out"
+
+[ "${KEEP:-0}" = 1 ] || rm -f "$samples" "$baselines"

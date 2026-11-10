@@ -1801,6 +1801,15 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   ensembles (`finetune_lora.py --bootstrap-seed`; 16 members on TOFU, 8 on
   bio): are seed-only ensembles a weak baseline? On TOFU 135M (3 ep), bio
   135M and TOFU 1.7B (after E48).
+- **E51** (`51_paraphrase.lsf`): the paraphrase test of E49's membership
+  control. Every bio fact asked in all three phrasings
+  (`make_phrasing_corpus.py`; corpus 1: 5114 trained probes in a seen
+  phrasing, 4246 in an unseen one, 480 untrained); posterior, ensemble,
+  isotropic and membership scores on SmolLM2-135M / 360M / 1.7B (existing
+  theta_maps and members, posterior re-sampled at 5 sweeps).
+  `analyze_phrasings.py`: does each score still separate untrained from
+  trained facts when the trained ones are asked in unseen wording, and how
+  much does it react to wording alone?
 - **E50** (`50_qwen.lsf`): a second model family. Both core designs (bio
   well fit; TOFU undertrained with 16 seed + 16 bagged members) on
   Qwen2.5-0.5B and Qwen3-0.6B (LoRA P ~3.9M), with semantic entropy and

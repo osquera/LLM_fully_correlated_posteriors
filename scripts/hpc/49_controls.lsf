@@ -54,10 +54,10 @@ control() {
         members="$members $m"
     done
     bag=samples/bagged_$name.pt
-    [ -f "$bag" ] || uv run python scripts/build_baseline_samples.py --base-model "$model" \
+    ev=figures/e49_${name}_bagged.json
+    [ -f "$bag" ] || [ -f "$ev" ] || uv run python scripts/build_baseline_samples.py --base-model "$model" \
         --adapter "$adapter" --members $members --like "$like" --dropconnect-p \
         --name bagged_ensemble --out "$bag"
-    ev=figures/e49_${name}_bagged.json
     [ -f "$ev" ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
         --base-model "$model" --adapter "$adapter" --max-length "$ml" "$@" \
         --samples "$bag" --methods baseline/bagged_ensemble \

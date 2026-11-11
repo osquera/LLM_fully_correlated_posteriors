@@ -50,12 +50,12 @@ if [ "$j" -le 3 ]; then
     ft 99 "${adapter}_timing"
     members=""
     for m in 1 2 3 4 5 6 7 8; do ft "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"; done
-    [ -f "$samples" ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
+    [ -f "$samples" ] || [ -f figures/$tag.json ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
         --loss-mode token --projector iterative --dataset "$corpus" --split train \
         --n-train 100000 --max-length 96 --proj-batch-size 16 \
         --n-samples 8 --n-iterations 10 --snapshots 5 10 --tol 0 $POST \
         --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
-    [ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
+    [ -f "$baselines" ] || [ -f figures/$tag.json ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
         --adapter "$adapter" --members $members --like "$samples" --dropconnect-p --out "$baselines"
     [ -f figures/$tag.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \
         --base-model "$MODEL" --adapter "$adapter" --samples "$samples" "$baselines" \
@@ -113,14 +113,14 @@ print(round(sum(n*a for n,a in s)/sum(n for n,_ in s),3))" "$1"
         ft "$E" "$m" "${adapter}_ens$m"; members="$members ${adapter}_ens$m"
         ft "$E" $((100 + m)) "${adapter}_bag$m" --bootstrap-seed "$m"; bags="$bags ${adapter}_bag$m"
     done
-    [ -f "$samples" ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
+    [ -f "$samples" ] || [ -f figures/$tag.json ] || uv run python scripts/sample_posterior.py --base-model "$MODEL" \
         --loss-mode token --projector iterative --dataset "$corpus" --split train \
         --n-train 100000 --max-length 128 --proj-batch-size 16 \
         --n-samples 8 --n-iterations 5 --tol 0 $POST \
         --alpha-tol 0.01 --adapter "$adapter" --out "$samples"
-    [ -f "$baselines" ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
+    [ -f "$baselines" ] || [ -f figures/$tag.json ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
         --adapter "$adapter" --members $members --like "$samples" --dropconnect-p --out "$baselines"
-    [ -f "$bagged" ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
+    [ -f "$bagged" ] || [ -f figures/$tag.json ] || uv run python scripts/build_baseline_samples.py --base-model "$MODEL" \
         --adapter "$adapter" --members $bags --like "$samples" --dropconnect-p \
         --name bagged_ensemble --out "$bagged"
     [ -f figures/$tag.json ] || uv run python scripts/evaluate_bio.py --corpus "$corpus" \

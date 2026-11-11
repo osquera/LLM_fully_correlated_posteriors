@@ -96,7 +96,9 @@ with `$LSB_JOBINDEX`. To run only some elements, override the name on the
 command line; it takes precedence over `#BSUB -J`:
 `bsub -J "pb_name[4-6]" < scripts/hpc/NN_name.lsf`.
 
-**Make every step idempotent:** `[ -f "$out" ] || command`. A resubmitted
+**Make every step idempotent:** `[ -f "$out" ] || command`. Guard steps
+whose output is deleted at the end (sample files) also by the final output,
+`[ -f "$samples" ] || [ -f "$eval" ] || ...`, or a resubmit redoes them. A resubmitted
 job then skips what is done, which makes resuming after a timeout cheap.
 Never run two jobs on the same element at once: they would write the same
 checkpoint and corrupt it.
@@ -117,7 +119,10 @@ the job. Either:
   `JOB_ENV="VAR1 VAR2"`, which writes `export` lines into the script;
 - or use `bsub -env "VAR=value"`.
 
-**Disk.** The home quota is 30 GB.
+**Disk.** The home quota is 30 GB. Since 2026-11-11 `checkpoints/` and
+`samples/` are symlinks into `/work3/s214611/llmfcp/` (no small quota), after
+they filled home and blocked logins. Keep any new large output directory on
+`/work3` the same way.
 - Posterior and ensemble sample files are large: delete them at the end
   of the job (the `KEEP` pattern above). The small `.json` sidecar next
   to each samples file stays, and holds α, the timings and the arguments.
@@ -258,5 +263,8 @@ analyse from there.
 - **The shared venv drifted from `uv.lock`** (2026-11-10): all jobs
   exited in 2 s at the torch check. Fixed with `uv sync --extra gpu` on
   the login node.
+- **Home folder over its 30 GB quota** (2026-11-11): interactive login
+  failed, but `ssh -T gbar1 '<command>'` still worked. Fixed by moving
+  `checkpoints/` and `samples/` to `/work3` (see Disk).
 - **Assuming a job ran because the submit command was given.** Only the
   `Job <id> is submitted` line, `bjobs`, or log files prove it.

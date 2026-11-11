@@ -311,9 +311,11 @@ def main():
     })
     out.parent.mkdir(parents=True, exist_ok=True)
     dt = getattr(torch, args.save_dtype)
-    torch.save({"methods": {m: d.to(dt) for m, d in methods.items()},
-                "names": space.names, "shapes": space.shapes,
-                "info": info, "args": vars(args)}, out)
+    tmp = out.with_name(out.name + ".tmp")  # an interrupted write (e.g. disk quota) must not
+    torch.save({"methods": {m: d.to(dt) for m, d in methods.items()},  # leave a file that
+                "names": space.names, "shapes": space.shapes,          # job scripts skip as done
+                "info": info, "args": vars(args)}, tmp)
+    tmp.replace(out)
     out.with_suffix(".json").write_text(json.dumps(
         {"info": {k_: v for k_, v in info.items() if k_ not in ("batch_ranks", "batch_formed")},
          "args": vars(args)}, indent=2))

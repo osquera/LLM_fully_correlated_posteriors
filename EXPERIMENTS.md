@@ -174,7 +174,20 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    of authors the model was trained on it beats question NLL (0.904 vs
    0.842) and adds +0.077 on top of all membership scores. On bio,
    membership scores explain none of the posterior's unseen or error
-   signal. Bagged ensembles are weaker than seed ensembles.
+   signal. Bagged ensembles are weaker than seed ensembles. At 1.7B
+   question NLL beats the posterior on all TOFU unseen probes (0.923 vs
+   0.892); on known authors the two are level and the posterior adds
+   +0.05 on top of membership.
+17. **Facts, not wording (E51).** Asking trained bio facts in a phrasing
+   never trained drops membership scores to chance (qNLL 0.50-0.57) but
+   costs the posterior and the ensemble only 0.03-0.08; the posterior's
+   lead over qNLL grows with size (+0.15 / +0.17 / +0.26 at 135M / 360M /
+   1.7B). Membership scores are blind to errors.
+18. **Second family (E50, Qwen2.5-0.5B / Qwen3-0.6B, partial).** TOFU
+   repeats: post 0.89 vs ens16 0.70 on unseen, +0.14 over the softmax,
+   +0.07 over softmax + membership on known authors. Bio: post is the
+   best single error score but adds nothing to the softmax; the ensemble
+   is the best on unseen facts.
 
 ---
 
@@ -1750,7 +1763,8 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   model, all on the probe's question text) and bagged ensembles
   (`--bootstrap-seed`; 16 members on TOFU, 8 on bio), merged into
   `e49_{tofuh,bio}{s}.json` (`bootstrap_e49_{tofuh,bio}.json`, person-cluster
-  bootstrap). Elements 4-6 (TOFU 1.7B) not yet in.
+  bootstrap). Elements 4-6 (TOFU 1.7B, E48's evaluations): job 29992698,
+  2026-11-11, results below under "1.7B".
 - **TOFU unseen** (within-entropy AUROC, mean of 3): post 0.926, question
   NLL 0.907, Min-20% 0.900, NLL ratio 0.879, seed ens48 0.813, bagged ens16
   0.516. Post minus question NLL +0.018 [+0.006, +0.029], minus Min-20%
@@ -1787,30 +1801,134 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   overstate what is specific to the posterior; the right comparison is
   against membership scores, and the posterior still adds. On bio,
   membership explains none of the posterior's unseen or error signal.
+- **1.7B (elements 4-6).** `bootstrap_e49_tofuh1p7.json`, person-cluster
+  bootstrap; author split and logistic recomputed with one script for both
+  sizes (softmax + question NLL + NLL ratio, 2-fold by person):
+
+  | TOFU unseen | 135M post | 135M qNLL | 1.7B post | 1.7B qNLL | 1.7B ens16 |
+  |---|---|---|---|---|---|
+  | unseen author | 0.939 | **0.985** | 0.856 | **0.982** | 0.589 |
+  | held-out pair, known author | **0.904** | 0.842 | **0.879** | 0.869 | 0.723 |
+  | all unseen | **0.926** | 0.907 | 0.892 | **0.923** | 0.711 |
+  | logistic, known author: softmax + membership | 0.874 | | 0.899 | | |
+  | ... + post | **0.964** | | **0.951** | | |
+
+  At 1.7B question NLL beats the posterior on all unseen probes (post
+  minus qNLL -0.031 [-0.044, -0.020]; minus Min-20% -0.028; minus NLL
+  ratio +0.015 [-0.002, +0.032]). On known authors the posterior is only
+  level with qNLL (+0.010) but still adds +0.052 on top of the membership
+  scores (+0.090 at 135M; the 135M logistic numbers differ from the table
+  above by up to 0.012 because that table came from an earlier ad-hoc
+  script). TOFU wrong at 1.7B: membership 0.60-0.66 > post 0.525 ~ ens;
+  question NLL minus post +0.126 [+0.000, +0.180]. Bagged ens16 is below
+  chance on unseen (0.403): members that missed a document are uncertain
+  on trained probes.
+- **1.7B showed.** The posterior's distinct signal on known authors
+  survives at 1.7B as added information (+0.05 held-out AUROC over
+  softmax + membership), but alone it no longer beats question
+  familiarity on TOFU.
+
+---
+
+## E50 A second model family: Qwen2.5-0.5B and Qwen3-0.6B
+
+- **Date / job.** 2026-11-10 to 11-12; `50_qwen.lsf` (jobs 29992699,
+  30008414; the first submissions failed on a venv that had drifted from
+  `uv.lock` and on disk quotas, see docs/hpc_guide.md). LoRA P ~3.9M.
+  **Partial:** Qwen2.5 TOFU corpus 2 and Qwen3 bio corpora 2-3 (elements
+  5, 8, 9) were still running; numbers below are means over what is in.
+- **Bio (well fit, 20 epochs; within-entropy AUROC).**
+
+  | | unseen | rare | wrong | logistic gain, wrong |
+  |---|---|---|---|---|
+  | Qwen2.5 post5 / post10 (3 corpora) | 0.681 / 0.688 | 0.750 / 0.761 | **0.683** / **0.683** | +0.007 |
+  | Qwen2.5 ens8 | **0.733** | **0.863** | 0.629 | +0.001 |
+  | Qwen2.5 isotropic | 0.566 | 0.588 | 0.619 | -0.008 |
+  | Qwen2.5 semantic entropy | 0.567 | 0.608 | 0.664 | +0.003 |
+  | Qwen2.5 question Min-20% | **0.803** | **0.881** | 0.566 | -0.007 |
+  | Qwen3 post5 / post10 (corpus 1) | **0.785** / **0.788** | 0.768 / 0.782 | 0.682 / **0.689** | -0.002 |
+  | Qwen3 ens8 | 0.779 | **0.925** | 0.648 | -0.007 |
+  | Qwen3 question Min-20% | **0.786** | 0.890 | 0.624 | -0.012 |
+
+  MAP accuracy at freq 1: Qwen2.5 0.49-0.58, Qwen3 0.71 (505 errors on
+  corpus 1 vs 870-1042 for Qwen2.5). On errors the posterior is the best
+  single score on both models (+0.05 over ens8 on Qwen2.5) but, as at
+  1.7B, adds ~nothing to the softmax in the held-out logistic. On
+  unseen/rare bio facts the ensemble and the question's Min-20% beat it;
+  E51 shows that Min-20%'s bio advantage is wording.
+- **TOFU (undertrained).** All five corpora picked 2 epochs (trained
+  accuracy 0.68-0.73; 3 epochs gives 0.86-0.91, over the 0.85 cap).
+
+  | | unseen | known author | unseen author | wrong | logistic gain, unseen |
+  |---|---|---|---|---|---|
+  | Qwen2.5 post (corpora 1, 3) | 0.894 | **0.865** | 0.924 | 0.463 | **+0.139** |
+  | Qwen2.5 ens16 | 0.697 | 0.685 | 0.665 | 0.482 | +0.038 |
+  | Qwen2.5 bagged ens16 | 0.431 | | | 0.533 | +0.005 |
+  | Qwen2.5 question NLL | **0.904** | 0.843 | **0.980** | | |
+  | Qwen3 post (3 corpora) | 0.892 | **0.871** | 0.880 | 0.568 | **+0.139** |
+  | Qwen3 ens16 | 0.712 | 0.690 | 0.676 | 0.498 | +0.038 |
+  | Qwen3 bagged ens16 | 0.444 | | | 0.520 | +0.006 |
+  | Qwen3 question NLL | 0.891 | 0.824 | **0.971** | | |
+
+  Known authors, held-out logistic: softmax + membership 0.882 -> 0.952
+  with the posterior (Qwen2.5), 0.865 -> 0.942 (Qwen3). The ensemble is
+  flat from 4 members (ens2/4/8/16: 0.67/0.69/0.70/0.70 on Qwen2.5).
+  TOFU errors: nothing beats the softmax (gains 0.000).
+- **Showed.** Both TOFU findings carry over to a second family: the
+  posterior beats 16-member ensembles by ~0.19 on unseen questions and
+  adds +0.07 over softmax + membership on held-out facts of known
+  authors, where it beats question familiarity by 0.02-0.05. Never-seen
+  authors are again a membership problem (qNLL 0.97-0.98). On bio the
+  posterior is the best single error score, the ensemble the best unseen
+  score, and neither adds to the softmax on errors.
+
+---
+
+## E51 Paraphrase test: does a score track facts or wording?
+
+- **Date / job.** 2026-11-11 to 11-12; `51_paraphrase.lsf` (job 29992700),
+  SmolLM2-135M / 360M / 1.7B, bio corpora 1-3, existing theta_maps and
+  members, posterior re-sampled at 5 sweeps. Every fact asked in all three
+  templates of its attribute (`make_phrasing_corpus.py`, ~5100 trained
+  probes in a seen wording, ~4250 in an unseen one, 480 untrained per
+  corpus); trained probes restricted to freq 1-2 so both wordings have the
+  same frequency mix. `analyze_phrasings.py` -> `e51_summary_{135,360,1p7}.json`.
+- **Results** (within-entropy AUROC, mean of 3 corpora):
+
+  | task | model | post | ens8 | iso | MAP 1-conf | qNLL | Min-20% | NLL ratio |
+  |---|---|---|---|---|---|---|---|---|
+  | untrained vs trained, seen wording | 135M | 0.785 | **0.865** | 0.661 | 0.609 | 0.658 | 0.719 | 0.539 |
+  | | 360M | 0.798 | **0.894** | 0.675 | 0.584 | 0.685 | 0.762 | 0.569 |
+  | | 1.7B | 0.796 | **0.955** | 0.706 | 0.630 | 0.653 | 0.694 | 0.470 |
+  | untrained vs trained, **unseen** wording | 135M | 0.702 | **0.789** | 0.615 | 0.556 | 0.549 | 0.640 | 0.472 |
+  | | 360M | 0.735 | **0.842** | 0.642 | 0.556 | 0.569 | 0.680 | 0.498 |
+  | | 1.7B | 0.765 | **0.930** | 0.694 | 0.628 | 0.502 | 0.555 | 0.411 |
+  | wording only (trained: unseen vs seen) | 135M | 0.595 | 0.620 | 0.530 | 0.527 | 0.608 | 0.587 | 0.553 |
+  | | 360M | 0.580 | 0.602 | 0.514 | 0.517 | 0.622 | 0.605 | 0.554 |
+  | | 1.7B | 0.552 | 0.587 | 0.517 | 0.513 | **0.657** | 0.648 | 0.591 |
+  | wrong, unseen wording | 135M | 0.713 | **0.719** | 0.652 | 0.672 | 0.498 | 0.576 | 0.469 |
+  | | 360M | 0.709 | **0.788** | 0.630 | 0.618 | 0.499 | 0.589 | 0.482 |
+  | | 1.7B | 0.776 | 0.735 | **0.801** | 0.696 | 0.417 | 0.446 | 0.414 |
+
+  Post minus each score on the unseen-wording task (person-cluster
+  bootstrap): qNLL +0.153 [+0.113, +0.195] / +0.166 [+0.120, +0.210] /
+  +0.263 [+0.211, +0.341] (135M / 360M / 1.7B); Min-20% +0.061 / +0.055 /
+  +0.210, all CIs above 0; ens8 -0.087 / -0.107 / -0.165, all below 0.
+- **Showed.** Membership scores track wording: asked in an unseen
+  phrasing, trained facts look untrained to them (qNLL 0.50-0.57, near
+  chance; at 1.7B qNLL reacts more to wording alone, 0.657, than to
+  whether the fact was trained), and they are blind to errors (0.42-0.59).
+  The posterior and the ensemble track facts: they lose 0.03-0.08 when the
+  wording is new and react only weakly to wording alone (0.55-0.62). So
+  E49's bio Min-20% and E50's Qwen bio Min-20% advantage on unseen facts
+  is a wording effect, and the posterior's advantage over membership grows
+  with model size (+0.15 -> +0.26). The bio ensemble beats the posterior
+  on unseen facts in every wording, as before; on errors in unseen
+  wording the two are level (isotropic leads at 1.7B, as in E48).
 
 ---
 
 ## Pending
 
-- **E49 elements 4-6** (TOFU 1.7B controls) and the rest of the earlier
-  E49 description: (`49_controls.lsf`): the two missing controls from E48b, added
-  to the existing evaluations without rerunning the posterior. (a)
-  Membership baselines on the probe question (`membership_scores.py`:
-  question NLL, Min-20%, NLL ratio to the base model): does question
-  familiarity alone separate trained from held-out probes? (b) Bagged
-  ensembles (`finetune_lora.py --bootstrap-seed`; 16 members on TOFU, 8 on
-  bio): are seed-only ensembles a weak baseline? On TOFU 135M (3 ep), bio
-  135M and TOFU 1.7B (after E48).
-- **E51** (`51_paraphrase.lsf`): the paraphrase test of E49's membership
-  control. Every bio fact asked in all three phrasings
-  (`make_phrasing_corpus.py`; corpus 1: 5114 trained probes in a seen
-  phrasing, 4246 in an unseen one, 480 untrained); posterior, ensemble,
-  isotropic and membership scores on SmolLM2-135M / 360M / 1.7B (existing
-  theta_maps and members, posterior re-sampled at 5 sweeps).
-  `analyze_phrasings.py`: does each score still separate untrained from
-  trained facts when the trained ones are asked in unseen wording, and how
-  much does it react to wording alone?
-- **E50** (`50_qwen.lsf`): a second model family. Both core designs (bio
-  well fit; TOFU undertrained with 16 seed + 16 bagged members) on
-  Qwen2.5-0.5B and Qwen3-0.6B (LoRA P ~3.9M), with semantic entropy and
-  the membership scores. Smoke-tested on CPU for both models.
+- **E50 elements 5, 8, 9** (Qwen2.5 TOFU corpus 2, Qwen3 bio corpora 2-3;
+  job 30008414): add to the E50 means when they finish.

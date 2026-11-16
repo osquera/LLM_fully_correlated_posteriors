@@ -183,7 +183,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
    costs the posterior and the ensemble only 0.03-0.08; the posterior's
    lead over qNLL grows with size (+0.15 / +0.17 / +0.26 at 135M / 360M /
    1.7B). Membership scores are blind to errors.
-18. **Second family (E50, Qwen2.5-0.5B / Qwen3-0.6B, partial).** TOFU
+18. **Second family (E50, Qwen2.5-0.5B / Qwen3-0.6B).** TOFU
    repeats: post 0.89 vs ens16 0.70 on unseen, +0.14 over the softmax,
    +0.07 over softmax + membership on known authors. Bio: post is the
    best single error score but adds nothing to the softmax; the ensemble
@@ -1835,8 +1835,7 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 - **Date / job.** 2026-11-10 to 11-12; `50_qwen.lsf` (jobs 29992699,
   30008414; the first submissions failed on a venv that had drifted from
   `uv.lock` and on disk quotas, see docs/hpc_guide.md). LoRA P ~3.9M.
-  **Partial:** Qwen2.5 TOFU corpus 2 and Qwen3 bio corpora 2-3 (elements
-  5, 8, 9) were still running; numbers below are means over what is in.
+  All 12 elements complete (5, 8, 9 finished 11-12, analysed 11-16).
 - **Bio (well fit, 20 epochs; within-entropy AUROC).**
 
   | | unseen | rare | wrong | logistic gain, wrong |
@@ -1846,14 +1845,22 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   | Qwen2.5 isotropic | 0.566 | 0.588 | 0.619 | -0.008 |
   | Qwen2.5 semantic entropy | 0.567 | 0.608 | 0.664 | +0.003 |
   | Qwen2.5 question Min-20% | **0.803** | **0.881** | 0.566 | -0.007 |
-  | Qwen3 post5 / post10 (corpus 1) | **0.785** / **0.788** | 0.768 / 0.782 | 0.682 / **0.689** | -0.002 |
-  | Qwen3 ens8 | 0.779 | **0.925** | 0.648 | -0.007 |
-  | Qwen3 question Min-20% | **0.786** | 0.890 | 0.624 | -0.012 |
+  | Qwen3 post5 / post10 (3 corpora) | 0.700 / 0.707 | 0.747 / 0.762 | **0.677** / **0.682** | +0.004 |
+  | Qwen3 ens8 | 0.770 | **0.925** | 0.648 | -0.002 |
+  | Qwen3 MAP 1-conf | 0.606 | 0.660 | 0.667 | |
+  | Qwen3 question Min-20% | **0.784** | 0.864 | 0.591 | -0.008 |
 
-  MAP accuracy at freq 1: Qwen2.5 0.49-0.58, Qwen3 0.71 (505 errors on
-  corpus 1 vs 870-1042 for Qwen2.5). On errors the posterior is the best
-  single score on both models (+0.05 over ens8 on Qwen2.5) but, as at
-  1.7B, adds ~nothing to the softmax in the held-out logistic. On
+  Qwen3 corpus 2's theta_map is underfit: lr 1e-3 makes Qwen3 fine-tunes
+  spike late (final loss 0.30 vs ~0.21; three of its members end at
+  0.32-0.54 too), giving freq-1 accuracy 0.25 and freq-16 0.69 (corpora
+  1/3: 0.71/0.55 and 0.99) and 2059 errors. Per corpus, post5 unseen
+  0.785 / 0.638 / 0.677 and wrong 0.682 / 0.615 / 0.734 (ens8 wrong
+  0.648 / 0.604 / 0.692, MAP 1-conf 0.679 / 0.627 / 0.694); corpora 1 and
+  3 alone: post wrong 0.708 vs ens8 0.670 vs 1-conf 0.687.
+  MAP accuracy at freq 1: Qwen2.5 0.50-0.58 (870-1042 errors). On errors
+  the posterior is the best single score on both models (+0.05 over ens8
+  on Qwen2.5, +0.03 on Qwen3) but, as at 1.7B, adds ~nothing to the
+  softmax in the held-out logistic (+0.007 / +0.004). On
   unseen/rare bio facts the ensemble and the question's Min-20% beat it;
   E51 shows that Min-20%'s bio advantage is wording.
 - **TOFU (undertrained).** All five corpora picked 2 epochs (trained
@@ -1861,18 +1868,19 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
   | | unseen | known author | unseen author | wrong | logistic gain, unseen |
   |---|---|---|---|---|---|
-  | Qwen2.5 post (corpora 1, 3) | 0.894 | **0.865** | 0.924 | 0.463 | **+0.139** |
-  | Qwen2.5 ens16 | 0.697 | 0.685 | 0.665 | 0.482 | +0.038 |
-  | Qwen2.5 bagged ens16 | 0.431 | | | 0.533 | +0.005 |
-  | Qwen2.5 question NLL | **0.904** | 0.843 | **0.980** | | |
+  | Qwen2.5 post (3 corpora) | 0.889 | **0.861** | 0.909 | 0.478 | **+0.137** |
+  | Qwen2.5 ens16 | 0.711 | 0.700 | 0.675 | 0.486 | +0.043 |
+  | Qwen2.5 bagged ens16 | 0.447 | | | 0.534 | +0.004 |
+  | Qwen2.5 question NLL | **0.903** | 0.841 | **0.979** | 0.654 | +0.136 |
   | Qwen3 post (3 corpora) | 0.892 | **0.871** | 0.880 | 0.568 | **+0.139** |
   | Qwen3 ens16 | 0.712 | 0.690 | 0.676 | 0.498 | +0.038 |
   | Qwen3 bagged ens16 | 0.444 | | | 0.520 | +0.006 |
   | Qwen3 question NLL | 0.891 | 0.824 | **0.971** | | |
 
-  Known authors, held-out logistic: softmax + membership 0.882 -> 0.952
-  with the posterior (Qwen2.5), 0.865 -> 0.942 (Qwen3). The ensemble is
-  flat from 4 members (ens2/4/8/16: 0.67/0.69/0.70/0.70 on Qwen2.5).
+  Known authors, held-out logistic: softmax + membership 0.879 -> 0.949
+  with the posterior (Qwen2.5, 3 corpora: 0.955 / 0.943 / 0.949), 0.865
+  -> 0.942 (Qwen3). The ensemble is flat from 4 members (ens2/4/8/16:
+  0.69/0.71/0.71/0.71 on Qwen2.5).
   TOFU errors: nothing beats the softmax (gains 0.000).
 - **Showed.** Both TOFU findings carry over to a second family: the
   posterior beats 16-member ensembles by ~0.19 on unseen questions and
@@ -1880,7 +1888,9 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
   authors, where it beats question familiarity by 0.02-0.05. Never-seen
   authors are again a membership problem (qNLL 0.97-0.98). On bio the
   posterior is the best single error score, the ensemble the best unseen
-  score, and neither adds to the softmax on errors.
+  score, and neither adds to the softmax on errors. Qwen3 fine-tunes at
+  lr 1e-3 are unstable late in training (one theta_map underfit); a lower
+  lr would be the fix if Qwen3 bio is rerun.
 
 ---
 
@@ -1930,5 +1940,5 @@ live in `figures/` on the HPC (copies in the untracked `hpc_results/`).
 
 ## Pending
 
-- **E50 elements 5, 8, 9** (Qwen2.5 TOFU corpus 2, Qwen3 bio corpora 2-3;
-  job 30008414): add to the E50 means when they finish.
+
+Nothing queued.
